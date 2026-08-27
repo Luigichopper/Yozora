@@ -26,6 +26,8 @@ import { useApp } from '../context/AppContext';
 import { DanmakuEngine } from './DanmakuEngine';
 import { SAMPLE_VIDEOS } from '../data/mockDanmaku';
 import { streamService, AnimeStreamSource } from '../services/streamService';
+import { rqbitService } from '../services/rqbitService';
+
 
 export const PlayerView: React.FC = () => {
   const {
@@ -423,15 +425,31 @@ export const PlayerView: React.FC = () => {
           }}
         >
           <AlertCircle size={44} color="var(--md-sys-color-primary)" style={{ marginBottom: '12px' }} />
-          <h3 style={{ fontSize: '18px', fontWeight: 700, color: '#fff' }}>Stream Source Not Reachable</h3>
-          <p style={{ fontSize: '13px', color: 'var(--md-sys-color-on-surface-variant)', maxWidth: '440px', marginTop: '6px', marginBottom: '18px' }}>
-            This remote stream server may be rate-limited or offline. Select another streaming server from the top menu or load a local video file.
+          <h3 style={{ fontSize: '18px', fontWeight: 700, color: '#fff' }}>Stream Source / Decoder Error</h3>
+          <p style={{ fontSize: '13px', color: 'var(--md-sys-color-on-surface-variant)', maxWidth: '480px', marginTop: '6px', marginBottom: '18px' }}>
+            HTML5 video cannot decode this stream format or the stream server is offline. (Browsers cannot natively play raw .mkv / FLAC torrent streams). Launch in external mpv or select another source.
           </p>
-          <div style={{ display: 'flex', gap: '10px' }}>
+          <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', justifyContent: 'center' }}>
+            {rqbitService.isTauri() && (
+              <button
+                className="section-btn"
+                onClick={async () => {
+                  const ok = await rqbitService.launchExternalMpv(currentVideoSrc, playerState.anime.title);
+                  if (ok) {
+                    showToast('Launched stream in external mpv!', 'success');
+                  } else {
+                    showToast('Failed to launch mpv. Ensure mpv is installed.', 'error');
+                  }
+                }}
+                style={{ background: 'var(--md-sys-color-primary)', color: 'var(--md-sys-color-on-primary)', borderColor: 'var(--md-sys-color-primary)', fontWeight: 700 }}
+              >
+                <Play size={14} fill="currentColor" />
+                <span>Launch in External MPV</span>
+              </button>
+            )}
             <button
               className="section-btn"
               onClick={() => fileInputRef.current?.click()}
-              style={{ background: 'var(--md-sys-color-primary)', color: 'var(--md-sys-color-on-primary)', borderColor: 'var(--md-sys-color-primary)' }}
             >
               <FolderOpen size={14} />
               <span>Load Local Video File</span>
@@ -441,7 +459,7 @@ export const PlayerView: React.FC = () => {
               onClick={() => setCurrentVideoSrc(SAMPLE_VIDEOS.default)}
             >
               <RefreshCw size={14} />
-              <span>Reload Primary Stream</span>
+              <span>Reload Sample Stream</span>
             </button>
           </div>
         </div>

@@ -1,0 +1,21 @@
+[package]
+name = "yozora"
+version = "0.1.0"
+description = "Anime tracking, browsing, and playback client for Arch Linux & Hyprland"
+authors = ["Luigi"]
+license = "GPL-3.0-or-later"
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "1.5", features = [] }
+
+[dependencies]
+tauri = { version = "1.5", features = [ "shell-sidecar", "window-hide", "window-unmaximize", "window-unminimize", "window-close", "window-maximize", "shell-execute", "window-show", "window-minimize", "shell-open", "window-start-dragging", "process-command-api"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1", features = ["full"] }
+reqwest = { version = "0.11", features = ["json"] }
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]

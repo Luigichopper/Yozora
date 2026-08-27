@@ -1,10 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Sparkles, Terminal, Shield, Rss, Palette, Check, RefreshCw, Copy, ExternalLink, HardDrive, Image as ImageIcon, FileCode, CheckCircle2 } from 'lucide-react';
+import { Sparkles, Terminal, Shield, Rss, Palette, Check, RefreshCw, Copy, ExternalLink, HardDrive, Image as ImageIcon, FileCode, CheckCircle2, Cpu, Play } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { MATUGEN_PALETTES } from '../theme/matugen';
 import { sourceService, RSSFeedProvider } from '../services/sourceService';
 import { anidbService } from '../services/anidbService';
 import { matugenService } from '../services/matugenService';
+import { rqbitService, RqbitStatus } from '../services/rqbitService';
 
 export const SettingsView: React.FC = () => {
   const { activePalette, setActivePalette, blurEnabled, setBlurEnabled, showToast } = useApp();
@@ -16,9 +17,12 @@ export const SettingsView: React.FC = () => {
   const [anidbClientVer, setAnidbClientVer] = useState('1');
   const [matugenJsonInput, setMatugenJsonInput] = useState('');
   const [showJsonDialog, setShowJsonDialog] = useState(false);
+  const [rqbitStatus, setRqbitStatus] = useState<RqbitStatus>({ running: false, listen_addr: '127.0.0.1:3030' });
+  const [rqbitListenPort, setRqbitListenPort] = useState('3030');
+  const [useExternalMpv, setUseExternalMpv] = useState(false);
   const wallpaperInputRef = useRef<HTMLInputElement | null>(null);
 
-  // Load active providers and AniDB credentials
+  // Load active providers, AniDB credentials, and rqbit daemon status
   useEffect(() => {
     async function loadData() {
       const p = await sourceService.getProviders();
@@ -26,9 +30,25 @@ export const SettingsView: React.FC = () => {
       const creds = anidbService.getCredentials();
       setAnidbClientName(creds.clientName);
       setAnidbClientVer(creds.clientVersion);
+
+      const rStatus = await rqbitService.checkStatus(`127.0.0.1:${rqbitListenPort}`);
+      setRqbitStatus(rStatus);
     }
     loadData();
-  }, []);
+  }, [rqbitListenPort]);
+
+  const handleStartRqbit = async () => {
+    showToast('Starting rqbit background daemon on port ' + rqbitListenPort + '...', 'info');
+    try {
+      const res = await rqbitService.startServer(`127.0.0.1:${rqbitListenPort}`);
+      setRqbitStatus(res);
+      if (res.running) {
+        showToast('rqbit server online and listening on ' + res.listen_addr, 'success');
+      }
+    } catch (e: any) {
+      showToast(e.message || 'Failed to start rqbit daemon. Is rqbit installed on your system PATH?', 'error');
+    }
+  };
 
   const hyprlandConfigSnippet = `# Hyprland Window Rules for Yozora (~/.config/hypr/hyprland.conf)
 windowrulev2 = float, class:^(yozora)$
@@ -384,6 +404,88 @@ windowrulev2 = idleinhibit focus, class:^(yozora)$`;
             </button>
           </div>
         </form>
+      </div>
+
+      {/* 5. rqbit BT Streaming Core & mpv Hardware Acceleration */}
+      <div style={{ background: 'var(--md-sys-color-surface-container)', border: '1px solid var(--md-sys-color-outline-variant)', borderRadius: '24px', padding: '24px', marginTop: '24px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <Cpu size={20} color="var(--md-sys-color-primary)" />
+            <h2 style={{ fontSize: '17px', fontWeight: 700, color: '#fff' }}>
+              rqbit BitTorrent Streaming Server & mpv Core
+            </h2>
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: rqbitStatus.running ? '#4caf50' : '#ff9800' }} />
+            <span style={{ fontSize: '12px', fontWeight: 600, color: rqbitStatus.running ? '#4caf50' : '#ff9800' }}>
+              {rqbitStatus.running ? `rqbit Daemon Online (Port ${rqbitListenPort})` : 'rqbit Daemon Standby'}
+            </span>
+          </div>
+        </div>
+
+        <p style={{ fontSize: '13px', color: 'var(--md-sys-color-on-surface-variant)', marginBottom: '16px' }}>
+          Yozora drives <code>rqbit server start</code> as a background subprocess, prioritizing sequential piece downloads and serving high-throughput <code>GET /torrents/&#123;id&#125;/stream/&#123;idx&#125;</code> streams with Range header seeking directly to the player.
+        </p>
+
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px', marginBottom: '16px' }}>
+          <div>
+            <label style={{ fontSize: '12px', color: 'var(--md-sys-color-on-surface-variant)', display: 'block', marginBottom: '4px' }}>
+              rqbit HTTP Listen Port
+            </label>
+            <input
+              type="text"
+              value={rqbitListenPort}
+              onChange={(e) => setRqbitListenPort(e.target.value)}
+              style={{
+                width: '100%',
+                background: 'var(--md-sys-color-surface-container-high)',
+                border: '1px solid var(--md-sys-color-outline-variant)',
+                borderRadius: '12px',
+                padding: '8px 12px',
+                color: '#fff',
+                fontSize: '13px'
+              }}
+            />
+          </div>
+
+          <div>
+            <label style={{ fontSize: '12px', color: 'var(--md-sys-color-on-surface-variant)', display: 'block', marginBottom: '4px' }}>
+              Torrent Disk Cache Directory
+            </label>
+            <input
+              type="text"
+              readOnly
+              value="~/.cache/yozora/torrents"
+              style={{
+                width: '100%',
+                background: 'var(--md-sys-color-surface-container-high)',
+                border: '1px solid var(--md-sys-color-outline-variant)',
+                borderRadius: '12px',
+                padding: '8px 12px',
+                color: '#a6accd',
+                fontSize: '13px',
+                fontFamily: 'var(--font-mono)'
+              }}
+            />
+          </div>
+        </div>
+
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <button
+            type="button"
+            className="section-btn"
+            onClick={handleStartRqbit}
+            style={{ background: 'var(--md-sys-color-primary)', color: 'var(--md-sys-color-on-primary)', borderColor: 'var(--md-sys-color-primary)', padding: '8px 18px' }}
+          >
+            <RefreshCw size={14} />
+            <span>{rqbitStatus.running ? 'Restart rqbit Daemon' : 'Start rqbit Daemon'}</span>
+          </button>
+
+          <div style={{ fontSize: '11px', color: 'var(--md-sys-color-on-surface-variant)', fontFamily: 'var(--font-mono)' }}>
+            Endpoint: http://127.0.0.1:{rqbitListenPort}/torrents/&#123;id&#125;/stream/0
+          </div>
+        </div>
       </div>
 
       {/* Matugen JSON Dialog */}

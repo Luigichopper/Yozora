@@ -3,6 +3,7 @@ import { X, Play, Star, Plus, Check, Download, Layers, Radio, ExternalLink, Cale
 import { AnimeItem, Episode, TorrentSource, WatchStatus } from '../types/anime';
 import { useApp } from '../context/AppContext';
 import { sourceService } from '../services/sourceService';
+import { rqbitService } from '../services/rqbitService';
 
 interface AnimeDetailModalProps {
   anime: AnimeItem;
@@ -10,7 +11,8 @@ interface AnimeDetailModalProps {
 }
 
 export const AnimeDetailModal: React.FC<AnimeDetailModalProps> = ({ anime, onClose }) => {
-  const { openPlayer, library, setAnimeStatus, setAnimeProgress, addDownloadTask } = useApp();
+  const { openPlayer, library, setAnimeStatus, setAnimeProgress, addDownloadTask, showToast } = useApp();
+
   const [activeTab, setActiveTab] = useState<'overview' | 'episodes' | 'sources'>('overview');
   const [sources, setSources] = useState<TorrentSource[]>([]);
   const [loadingSources, setLoadingSources] = useState<boolean>(false);
@@ -450,13 +452,19 @@ export const AnimeDetailModal: React.FC<AnimeDetailModalProps> = ({ anime, onClo
                       <button
                         className="section-btn"
                         style={{ background: 'var(--md-sys-color-primary)', color: 'var(--md-sys-color-on-primary)', borderColor: 'var(--md-sys-color-primary)', padding: '8px 14px' }}
-                        onClick={() => {
-                          onClose();
-                          openPlayer(anime, anime.episodes[0], undefined, src.title);
+                        onClick={async () => {
+                          try {
+                            showToast(`Connecting to BT swarm for "${anime.title}"...`, 'info');
+                            const streamRes = await rqbitService.addTorrentAndGetStream(src.magnetLink, anime.title);
+                            onClose();
+                            openPlayer(anime, anime.episodes[0], streamRes.stream_url, src.title);
+                          } catch (err: any) {
+                            showToast(err.message || 'rqbit BitTorrent engine offline. Please start rqbit in Settings.', 'error');
+                          }
                         }}
                       >
                         <Play size={14} fill="currentColor" />
-                        <span>Direct Stream</span>
+                        <span>Direct Stream (rqbit)</span>
                       </button>
                     </div>
                   </div>
