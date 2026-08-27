@@ -80,11 +80,32 @@ flowchart TD
 - Node.js (v18+)
 - npm (v9+)
 
-### Installation & Local Run
+### Arch Linux Quick Install (One-Liner)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Luigichopper/Yozora/main/install.sh | bash
+```
+
+### Arch Linux / AUR Installation (via `makepkg` or `yay`)
+
+#### 1. Install directly from local repository:
+```bash
+# Build and install package using makepkg or yay
+cd aur
+makepkg -si
+```
+
+#### 2. Install from AUR (once published):
+```bash
+# Install with yay AUR helper
+yay -S yozora-git
+```
+
+### Manual Development & Build
 
 ```bash
 # Clone repository
-git clone https://github.com/pctrade/yozora.git
+git clone https://github.com/Luigichopper/Yozora.git
 cd Yozora
 
 # Install dependencies
@@ -92,14 +113,10 @@ npm install
 
 # Start local development server
 npm run dev
-```
 
-Open [http://localhost:5173](http://localhost:5173) in your browser.
-
-### Production Build
-
-```bash
-npm run build
+# Build Tauri desktop release
+cd src-tauri
+cargo build --release
 ```
 
 ---

@@ -1,0 +1,114 @@
+name: Release & Multiplatform Build
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  # 1. Build Arch Linux Package (.pkg.tar.zst & standalone binary)
+  build-arch-linux:
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:latest
+    steps:
+      - name: Update system & install dependencies
+        run: |
+          pacman -Syu --noconfirm base-devel nodejs npm rust cargo git webkit2gtk-4.1 gtk3 mpv
+          useradd -m builder
+          echo "builder ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set workspace permissions
+        run: chown -R builder:builder /__w/Yozora/Yozora
+
+      - name: Build Web Frontend & Tauri Binary
+        run: |
+          su builder -c "npm install && npm run build"
+          su builder -c "cd src-tauri && cargo build --release --locked"
+
+      - name: Package Arch Linux .pkg.tar.zst
+        run: |
+          su builder -c "cd aur && makepkg -s --noconfirm --nodeps"
+          mkdir -p /tmp/dist-linux
+          cp aur/*.pkg.tar.zst /tmp/dist-linux/ || true
+          cp src-tauri/target/release/yozora /tmp/dist-linux/yozora-linux-x86_64
+
+      - name: Upload Linux Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: yozora-linux-artifacts
+          path: /tmp/dist-linux/*
+
+  # 2. Build Windows Release Executable (.exe)
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install dependencies & build frontend
+        run: |
+          npm install
+          npm run build
+
+      - name: Build Windows release binary
+        run: |
+          cd src-tauri
+          cargo build --release --locked
+
+      - name: Prepare Windows artifact
+        run: |
+          mkdir dist-win
+          copy src-tauri\target\release\yozora.exe dist-win\yozora-windows-x64.exe
+
+      - name: Upload Windows Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: yozora-windows-artifact
+          path: dist-win/yozora-windows-x64.exe
+
+  # 3. Create GitHub Release & Publish All Artifacts
+  publish-release:
+    needs: [build-arch-linux, build-windows]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download all built artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+
+      - name: Flatten and generate checksums
+        run: |
+          mkdir -p release-files
+          find release-artifacts -type f -exec cp {} release-files/ \;
+          cd release-files
+          sha256sum * > SHA256SUMS.txt
+          ls -la
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: release-files/*
+          generate_release_notes: true
+          draft: false
+          prerelease: false

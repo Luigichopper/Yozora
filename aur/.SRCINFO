@@ -1,0 +1,27 @@
+pkgbase = yozora-git
+	pkgdesc = Native Arch/Hyprland anime tracking, browsing, and playback client with Matugen theming, rqbit streaming, and danmaku
+	pkgver = 0.1.0
+	pkgrel = 1
+	url = https://github.com/Luigichopper/Yozora
+	arch = x86_64
+	arch = aarch64
+	license = GPL-3.0-or-later
+	makedepends = nodejs
+	makedepends = npm
+	makedepends = cargo
+	makedepends = git
+	depends = mpv
+	depends = gtk3
+	depends = webkit2gtk-4.1
+	depends = xdg-desktop-portal-hyprland
+	optdepends = matugen: dynamic Material You color palette generation
+	optdepends = rqbit: embedded high-performance BitTorrent streaming daemon
+	provides = yozora
+	conflicts = yozora
+	conflicts = yozora-bin
+	source = git+https://github.com/Luigichopper/Yozora.git
+	source = yozora.desktop
+	sha256sums = SKIP
+	sha256sums = SKIP
+
+pkgname = yozora-git
