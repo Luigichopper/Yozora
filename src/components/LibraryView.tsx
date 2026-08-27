@@ -77,27 +77,54 @@ export const LibraryView: React.FC = () => {
     showToast('Exported AniDB sync file!', 'success');
   };
 
+  const isValidLibraryExport = (data: any): boolean => {
+    if (!data || typeof data !== 'object') return false;
+    if (!Array.isArray(data.entries)) return false;
+    for (const entry of data.entries) {
+      if (!entry || (typeof entry.anidbId !== 'string' && typeof entry.anidbId !== 'number')) return false;
+    }
+    return true;
+  };
+
   const handleImportAniDB = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+
+    const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024; // 10 MB limit
+    if (file.size > MAX_FILE_SIZE_BYTES) {
+      showToast('Import failed: File exceeds maximum allowed size (10 MB).', 'error');
+      e.target.value = '';
+      return;
+    }
+
+    if (file.type && file.type !== 'application/json' && !file.name.endsWith('.json')) {
+      showToast('Import failed: Selected file must be a valid JSON file.', 'error');
+      e.target.value = '';
+      return;
+    }
 
     const reader = new FileReader();
     reader.onload = async (event) => {
       try {
         const json = JSON.parse(event.target?.result as string);
-        if (json.entries && Array.isArray(json.entries)) {
-          for (const item of json.entries) {
-            const animeId = `a${item.anidbId}`;
-            await setAnimeStatus(animeId, item.status || 'Watching');
-            await setAnimeProgress(animeId, item.watchedEpisodes || 1);
-            if (item.myScore) {
-              await setAnimeScore(animeId, item.myScore);
-            }
-          }
-          showToast(`Successfully imported ${json.entries.length} anime entries!`, 'success');
+        if (!isValidLibraryExport(json)) {
+          showToast('Import failed: Invalid Yozora library JSON schema.', 'error');
+          return;
         }
+
+        for (const item of json.entries) {
+          const animeId = `a${item.anidbId}`;
+          await setAnimeStatus(animeId, item.status || 'Watching');
+          await setAnimeProgress(animeId, item.watchedEpisodes || 1);
+          if (item.myScore) {
+            await setAnimeScore(animeId, item.myScore);
+          }
+        }
+        showToast(`Successfully imported ${json.entries.length} anime entries!`, 'success');
       } catch (err) {
         showToast('Failed to parse AniDB import JSON.', 'error');
+      } finally {
+        if (fileInputRef.current) fileInputRef.current.value = '';
       }
     };
     reader.readAsText(file);

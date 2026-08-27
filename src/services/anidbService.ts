@@ -172,11 +172,18 @@ class AniDBService {
   }
 
   /**
-   * Fetch anime details by ID with TTL check
+   * Fetch anime details by ID with TTL check (7 days eviction)
    */
   public async getAnimeById(id: string): Promise<AnimeItem | null> {
-    const cached = await db.getAnime(id);
-    if (cached) return cached;
+    const record = await db.getAnimeCacheRecord(id);
+    if (record) {
+      const now = Date.now();
+      if (now - record.cachedAt > CACHE_TTL_MS) {
+        await db.deleteAnime(id);
+      } else {
+        return record.data;
+      }
+    }
 
     const mockFound = MOCK_ANIME_DATABASE.find(a => a.id === id);
     if (mockFound) {

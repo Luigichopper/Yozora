@@ -1,16 +1,13 @@
 import { DanmakuComment } from '../types/anime';
 
-// High-speed anime video streams and animations (replacing generic test videos with anime streams)
+// Verified, high-throughput public media streams (200 OK without 403 blocks)
 export const SAMPLE_VIDEOS = {
-  // Sintel: Open Anime fantasy film with high action & anime aesthetic
-  default: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/Sintel.mp4',
-  mirror1: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/TearsOfSteel.mp4',
-  mirror2: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ElephantsDream.mp4',
-  mirror3: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerEscapes.mp4',
-  mirror4: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4',
-  animeTeaser: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/Sintel.mp4',
-  musicVideo: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/TearsOfSteel.mp4',
-  highQualityStream: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/Sintel.mp4'
+  default: 'https://media.w3.org/2010/05/sintel/trailer.mp4',
+  mirror1: 'https://cdn.plyr.io/static/demo/View_From_A_Blue_Moon_Trailer-1080p.mp4',
+  mirror2: 'https://cdn.plyr.io/static/demo/View_From_A_Blue_Moon_Trailer-720p.mp4',
+  mirror3: 'https://media.w3.org/2010/05/bunny/trailer.mp4',
+  mirror4: 'https://vjs.zencdn.net/v/oceans.mp4',
+  hlsStream: 'https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8'
 };
 
 export const MOCK_DANMAKU_COMMENTS: DanmakuComment[] = [

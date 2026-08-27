@@ -106,7 +106,7 @@ npm run build
 
 ## 🐧 Arch Linux & Hyprland Integration
 
-### Hyprland Window Rules
+### Hyprland Window Rules (`hyprland.conf`)
 Add the following snippet to your `~/.config/hypr/hyprland.conf`:
 
 ```ini
@@ -118,6 +118,24 @@ windowrulev2 = opacity 0.95 0.90, class:^(yozora)$
 windowrulev2 = rounding 20, class:^(yozora)$
 windowrulev2 = noborder, class:^(yozora)$
 windowrulev2 = idleinhibit focus, class:^(yozora)$
+```
+
+### Hyprland Lua Configuration (`hyprland.lua`)
+For users using Lua-based Hyprland setups (`~/.config/hypr/hyprland.lua`):
+
+```lua
+-- Yozora Desktop Window Rules
+return {
+  windowrulev2 = {
+    "float, class:^(yozora)$",
+    "size 1200 800, class:^(yozora)$",
+    "center, class:^(yozora)$",
+    "opacity 0.95 0.90, class:^(yozora)$",
+    "rounding 20, class:^(yozora)$",
+    "noborder, class:^(yozora)$",
+    "idleinhibit focus, class:^(yozora)$",
+  }
+}
 ```
 
 ### AUR Packaging

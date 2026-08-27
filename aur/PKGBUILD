@@ -1,29 +1,40 @@
 # Maintainer: Luigi <luigi@archlinux.org>
-pkgname=yozora-bin
+pkgname=yozora-git
 pkgver=0.1.0
 pkgrel=1
-pkgdesc="Native Arch/Hyprland anime tracking, browsing, and playback client with Matugen theming and danmaku"
+pkgdesc="Native Arch/Hyprland anime tracking, browsing, and playback client with Matugen theming, rqbit streaming, and danmaku"
 arch=('x86_64' 'aarch64')
-url="https://github.com/pctrade/yozora"
+url="https://github.com/Luigichopper/Yozora"
 license=('GPL-3.0-or-later')
 depends=(
   'mpv'
-  'gtk4'
-  'libadwaita'
+  'gtk3'
   'webkit2gtk-4.1'
   'xdg-desktop-portal-hyprland'
 )
 optdepends=(
   'matugen: dynamic Material You color palette generation'
-  'transmission-cli: optional external BitTorrent daemon backend'
+  'rqbit: embedded high-performance BitTorrent streaming daemon'
 )
+makedepends=('nodejs' 'npm' 'cargo' 'git')
 provides=('yozora')
-conflicts=('yozora')
-source=("yozora.desktop")
-sha256sums=('SKIP')
+conflicts=('yozora' 'yozora-bin')
+source=("git+https://github.com/Luigichopper/Yozora.git"
+        "yozora.desktop")
+sha256sums=('SKIP'
+            'SKIP')
+
+build() {
+  cd "$srcdir/Yozora"
+  npm install
+  npm run build
+  cd src-tauri
+  cargo build --release --locked
+}
 
 package() {
-  install -Dm755 "yozora" "$pkgdir/usr/bin/yozora"
-  install -Dm644 "yozora.desktop" "$pkgdir/usr/share/applications/yozora.desktop"
-  install -Dm644 "icon.png" "$pkgdir/usr/share/icons/hicolor/512x512/apps/yozora.png"
+  cd "$srcdir/Yozora"
+  install -Dm755 "src-tauri/target/release/yozora" "$pkgdir/usr/bin/yozora"
+  install -Dm644 "aur/yozora.desktop" "$pkgdir/usr/share/applications/yozora.desktop"
+  install -Dm644 "public/logo.svg" "$pkgdir/usr/share/icons/hicolor/scalable/apps/yozora.svg"
 }

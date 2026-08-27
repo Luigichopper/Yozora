@@ -46,7 +46,7 @@ class MatugenService {
   }
 
   /**
-   * Advanced K-Means Color Quantization to extract vibrant dominant colors from wallpaper
+   * Saturation-Weighted Pixel Cluster Sampling to extract vibrant dominant colors from wallpaper
    */
   public async extractPaletteFromImage(file: File): Promise<MatugenPalette> {
     return new Promise((resolve) => {
@@ -87,7 +87,7 @@ class MatugenService {
             }
           }
 
-          // Pick the most vibrant (high saturation, medium-high luminance) dominant cluster
+          // Pick the most vibrant (high saturation, balanced luminance) dominant cluster
           clusters.sort((a, b) => (b.saturation * 1.5 + (b.luminance / 255)) - (a.saturation * 1.5 + (a.luminance / 255)));
           const best = clusters[0] || { r: 228, g: 181, b: 203 };
 
@@ -117,7 +117,7 @@ class MatugenService {
     return {
       id: `wallpaper-palette-${Date.now()}`,
       name: `Wallpaper Palette (${name.slice(0, 16)})`,
-      description: 'Extracted via K-Means color quantization algorithm',
+      description: 'Extracted via saturation-weighted pixel cluster sampling',
       primary: primaryHex,
       onPrimary: '#140c12',
       primaryContainer: this.adjustBrightness(primaryHex, -45),

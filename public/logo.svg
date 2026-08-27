@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="100%" height="100%">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1e1322" />
+      <stop offset="50%" stop-color="#2d1a33" />
+      <stop offset="100%" stop-color="#120c15" />
+    </linearGradient>
+    <linearGradient id="starGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#e4b5cb" />
+      <stop offset="100%" stop-color="#ffd8e8" />
+    </linearGradient>
+    <linearGradient id="moonGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ffd8e8" />
+      <stop offset="100%" stop-color="#e4b5cb" />
+    </linearGradient>
+  </defs>
+  <rect width="256" height="256" rx="56" fill="url(#bgGrad)" />
+  <!-- Crescent Moon -->
+  <path d="M148 56 C110 56, 80 86, 80 124 C80 162, 110 192, 148 192 C162 192, 175 188, 186 180 C156 182, 126 156, 126 124 C126 92, 156 66, 186 68 C175 60, 162 56, 148 56 Z" fill="url(#moonGrad)" />
+  <!-- Anime Sparkle Stars -->
+  <path d="M192 76 Q192 92, 208 92 Q192 92, 192 108 Q192 92, 176 92 Q192 92, 192 76 Z" fill="url(#starGrad)" />
+  <path d="M76 64 Q76 74, 86 74 Q76 74, 76 84 Q76 74, 66 74 Q76 74, 76 64 Z" fill="url(#starGrad)" />
+  <path d="M88 172 Q88 180, 96 180 Q88 180, 88 188 Q88 180, 80 180 Q88 180, 88 172 Z" fill="url(#starGrad)" />
+  <!-- Play Indicator Core -->
+  <polygon points="120,110 120,138 144,124" fill="#140c12" />
+</svg>

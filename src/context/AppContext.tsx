@@ -15,6 +15,8 @@ import { anidbService } from '../services/anidbService';
 import { sourceService } from '../services/sourceService';
 import { danmakuService } from '../services/danmakuService';
 import { streamService } from '../services/streamService';
+import { rqbitService } from '../services/rqbitService';
+import { torrentEngine } from '../services/torrentEngine';
 import { SAMPLE_VIDEOS } from '../data/mockDanmaku';
 
 export type ActiveView = 'discover' | 'browse' | 'library' | 'cache' | 'settings';
@@ -113,19 +115,24 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   // Initial load from IndexedDB
   useEffect(() => {
     async function initFromDb() {
-      // 1. Theme
-      const savedPaletteId = await db.getSetting<string>('yozora_palette_id', 'twilight-sakura');
-      const found = MATUGEN_PALETTES.find(p => p.id === savedPaletteId) || MATUGEN_PALETTES[0];
-      setActivePaletteState(found);
-      applyMatugenTheme(found);
+      try {
+        // 1. Theme
+        const savedPaletteId = await db.getSetting<string>('yozora_palette_id', 'twilight-sakura');
+        const found = MATUGEN_PALETTES.find(p => p.id === savedPaletteId) || MATUGEN_PALETTES[0];
+        setActivePaletteState(found);
+        applyMatugenTheme(found);
 
-      // 2. Library
-      const dbLib = await db.getLibrary();
-      setLibrary(dbLib);
+        // 2. Library
+        const dbLib = await db.getLibrary();
+        setLibrary(dbLib);
 
-      // 3. Downloads
-      const dbDownloads = await db.getDownloads();
-      setDownloadTasks(dbDownloads);
+        // 3. Downloads
+        const dbDownloads = await db.getDownloads();
+        setDownloadTasks(dbDownloads);
+      } catch (err) {
+        console.error('Failed to initialize Yozora state from IndexedDB:', err);
+        showToast('Warning: Unable to load saved user data from local database.', 'warning');
+      }
     }
     initFromDb();
   }, []);
@@ -156,11 +163,15 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       opSkipEnd: 180
     });
     
-    // Resolve authentic video stream for this specific anime & episode
+    // Resolve authentic BitTorrent stream for this specific anime & episode
     let chosenVideo = videoUrl;
     if (!chosenVideo) {
-      const resolvedStreams = await streamService.resolveEpisodeStream(anime.title, anime.romajiTitle, ep.epNumber);
-      chosenVideo = resolvedStreams[0]?.url || SAMPLE_VIDEOS.default;
+      const resolvedStreams = await streamService.resolveEpisodeStream(anime.id, anime.title, anime.romajiTitle, ep.epNumber);
+      if (resolvedStreams.length > 0 && resolvedStreams[0]?.url) {
+        chosenVideo = resolvedStreams[0].url;
+      } else {
+        chosenVideo = `http://127.0.0.1:3030/torrents/0/stream/0`;
+      }
     }
     
     // Load danmaku comments for this exact episode from danmakuService
@@ -272,8 +283,11 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   };
 
   const addDownloadTask = async (anime: AnimeItem, episode: Episode, source: TorrentSource) => {
+    const taskId = `dl-${Date.now()}`;
+    const initialStreamUrl = `http://127.0.0.1:3030/torrents/0/stream/0`;
+
     const newTask: DownloadTask = {
-      id: `dl-${Date.now()}`,
+      id: taskId,
       animeId: anime.id,
       animeTitle: anime.title,
       episodeNum: episode.epNumber,
@@ -281,21 +295,59 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       group: source.group,
       resolution: source.resolution,
       fileSize: source.fileSize,
-      totalBytes: 1350000000,
-      downloadedBytes: 1350000000, // Complete for instant playback
+      totalBytes: 1420000000,
+      downloadedBytes: 0,
       downloadSpeed: 0,
-      uploadSpeed: 180,
-      progress: 100,
-      status: 'completed',
-      peers: source.seeders,
-      etaSeconds: 0,
+      uploadSpeed: 0,
+      progress: 0,
+      status: 'downloading',
+      peers: source.seeders || 0,
+      etaSeconds: 120,
       addedAt: new Date().toLocaleDateString() + ' ' + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      videoUrl: SAMPLE_VIDEOS.default
+      videoUrl: initialStreamUrl
     };
 
     await db.saveDownloadTask(newTask);
     setDownloadTasks(prev => [newTask, ...prev]);
-    showToast(`Added "${source.title}" to Cache Manager!`, 'success');
+    showToast(`Connecting to BitTorrent swarm for "${source.title}"...`, 'info');
+
+    // 1. Register with in-browser WebTorrent transfer engine
+    try {
+      torrentEngine.addTorrent(source.magnetLink, (stats) => {
+        setDownloadTasks(prev => prev.map(t => {
+          if (t.id === taskId) {
+            const isDone = stats.state === 'completed' || stats.progress >= 100;
+            const updated: DownloadTask = {
+              ...t,
+              downloadedBytes: stats.downloaded,
+              totalBytes: stats.length,
+              downloadSpeed: stats.downloadSpeed,
+              uploadSpeed: stats.uploadSpeed,
+              progress: stats.progress,
+              peers: stats.numPeers,
+              etaSeconds: stats.timeRemaining,
+              status: isDone ? 'completed' : stats.state === 'paused' ? 'paused' : 'downloading',
+              videoUrl: stats.streamUrl || t.videoUrl
+            };
+            db.saveDownloadTask(updated);
+            return updated;
+          }
+          return t;
+        }));
+      });
+    } catch (e) {
+      console.warn('WebTorrent engine add error:', e);
+    }
+
+    // 2. Also register with native rqbit daemon if available
+    try {
+      const streamRes = await rqbitService.addTorrentAndGetStream(source.magnetLink, anime.title);
+      if (streamRes?.stream_url) {
+        setDownloadTasks(prev => prev.map(t => t.id === taskId ? { ...t, videoUrl: streamRes.stream_url } : t));
+      }
+    } catch (e) {
+      // rqbit offline is non-fatal
+    }
   };
 
   const addCustomMagnetTask = async (magnetUri: string): Promise<boolean> => {
@@ -305,8 +357,11 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       return false;
     }
 
+    const taskId = `dl-magnet-${Date.now()}`;
+    const initialStreamUrl = `http://127.0.0.1:3030/torrents/0/stream/0`;
+
     const newTask: DownloadTask = {
-      id: `dl-magnet-${Date.now()}`,
+      id: taskId,
       animeId: 'custom',
       animeTitle: parsed.name,
       episodeNum: 1,
@@ -315,20 +370,59 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       resolution: '1080p',
       fileSize: '1.40 GB',
       totalBytes: 1400000000,
-      downloadedBytes: 1400000000,
+      downloadedBytes: 0,
       downloadSpeed: 0,
-      uploadSpeed: 210,
-      progress: 100,
-      status: 'completed',
-      peers: 42,
-      etaSeconds: 0,
+      uploadSpeed: 0,
+      progress: 0,
+      status: 'downloading',
+      peers: 0,
+      etaSeconds: 120,
       addedAt: new Date().toLocaleDateString() + ' ' + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      videoUrl: SAMPLE_VIDEOS.default
+      videoUrl: initialStreamUrl
     };
 
     await db.saveDownloadTask(newTask);
     setDownloadTasks(prev => [newTask, ...prev]);
-    showToast(`Connected to BitTorrent swarm for "${parsed.name}"!`, 'success');
+    showToast(`Connecting to BitTorrent swarm for "${parsed.name}"...`, 'info');
+
+    // 1. Register with in-browser WebTorrent transfer engine
+    try {
+      torrentEngine.addTorrent(magnetUri, (stats) => {
+        setDownloadTasks(prev => prev.map(t => {
+          if (t.id === taskId) {
+            const isDone = stats.state === 'completed' || stats.progress >= 100;
+            const updated: DownloadTask = {
+              ...t,
+              downloadedBytes: stats.downloaded,
+              totalBytes: stats.length,
+              downloadSpeed: stats.downloadSpeed,
+              uploadSpeed: stats.uploadSpeed,
+              progress: stats.progress,
+              peers: stats.numPeers,
+              etaSeconds: stats.timeRemaining,
+              status: isDone ? 'completed' : stats.state === 'paused' ? 'paused' : 'downloading',
+              videoUrl: stats.streamUrl || t.videoUrl
+            };
+            db.saveDownloadTask(updated);
+            return updated;
+          }
+          return t;
+        }));
+      });
+    } catch (e) {
+      console.warn('WebTorrent engine add error:', e);
+    }
+
+    // 2. Also register with native rqbit daemon if available
+    try {
+      const streamRes = await rqbitService.addTorrentAndGetStream(magnetUri, parsed.name);
+      if (streamRes?.stream_url) {
+        setDownloadTasks(prev => prev.map(t => t.id === taskId ? { ...t, videoUrl: streamRes.stream_url } : t));
+      }
+    } catch (e) {
+      // rqbit offline is non-fatal
+    }
+
     return true;
   };
 
@@ -337,10 +431,11 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       const updated = prev.map(task => {
         if (task.id === id) {
           const nextStatus = task.status === 'downloading' ? 'paused' : 'downloading';
+          torrentEngine.togglePause(id);
           const u: DownloadTask = {
             ...task,
             status: nextStatus,
-            downloadSpeed: nextStatus === 'paused' ? 0 : 9500
+            downloadSpeed: nextStatus === 'paused' ? 0 : task.downloadSpeed
           };
           db.saveDownloadTask(u);
           return u;
@@ -352,6 +447,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   };
 
   const deleteDownloadTask = async (id: string) => {
+    torrentEngine.removeTorrent(id);
     await db.deleteDownloadTask(id);
     setDownloadTasks(prev => prev.filter(task => task.id !== id));
     showToast('Removed task from Cache Manager.', 'info');

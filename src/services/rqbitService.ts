@@ -26,8 +26,12 @@ export interface RqbitTorrentStats {
 class RqbitService {
   private defaultAddr = '127.0.0.1:3030';
 
-  private isTauriAvailable(): boolean {
+  public isTauri(): boolean {
     return typeof window !== 'undefined' && '__TAURI__' in window;
+  }
+
+  private isTauriAvailable(): boolean {
+    return this.isTauri();
   }
 
   private async invokeTauri<T>(cmd: string, args?: Record<string, any>): Promise<T> {
@@ -88,10 +92,6 @@ class RqbitService {
         listen_addr: listenAddr
       };
     }
-  }
-
-  public isTauri(): boolean {
-    return this.isTauriAvailable();
   }
 
   /**

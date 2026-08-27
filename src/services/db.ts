@@ -65,7 +65,22 @@ export class YozoraDB {
     return new Promise((resolve) => {
       const req = store.get(id);
       req.onsuccess = () => resolve(req.result ? req.result.data : null);
-      req.onerror = () => resolve(null);
+      req.onerror = () => {
+        console.error(`IndexedDB read failed for anime ${id}:`, req.error);
+        resolve(null);
+      };
+    });
+  }
+
+  async getAnimeCacheRecord(id: string): Promise<{ data: AnimeItem; cachedAt: number } | null> {
+    const store = await this.getStore('anime_cache', 'readonly');
+    return new Promise((resolve) => {
+      const req = store.get(id);
+      req.onsuccess = () => resolve(req.result ? { data: req.result.data, cachedAt: req.result.cachedAt } : null);
+      req.onerror = () => {
+        console.error(`IndexedDB cache record read failed for anime ${id}:`, req.error);
+        resolve(null);
+      };
     });
   }
 
@@ -74,7 +89,10 @@ export class YozoraDB {
     return new Promise((resolve) => {
       const req = store.getAll();
       req.onsuccess = () => resolve(req.result.map((r: any) => r.data));
-      req.onerror = () => resolve([]);
+      req.onerror = () => {
+        console.error('IndexedDB getAllCachedAnime failed:', req.error);
+        resolve([]);
+      };
     });
   }
 
@@ -88,16 +106,34 @@ export class YozoraDB {
     });
   }
 
-  async saveBulkAnime(animeList: AnimeItem[]): Promise<void> {
+  async deleteAnime(id: string): Promise<void> {
     const store = await this.getStore('anime_cache', 'readwrite');
+    store.delete(id);
+  }
+
+  async saveBulkAnime(animeList: AnimeItem[]): Promise<void> {
+    if (animeList.length === 0) return;
+    const db = await this.dbPromise;
+    const tx = db.transaction('anime_cache', 'readwrite');
+    const store = tx.objectStore('anime_cache');
+    const now = Date.now();
+
     for (const anime of animeList) {
       store.put({
         id: anime.id,
         anidbId: anime.anidbId,
         data: anime,
-        cachedAt: Date.now()
+        cachedAt: now
       });
     }
+
+    return new Promise((resolve, reject) => {
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => {
+        console.error('IndexedDB saveBulkAnime transaction failed:', tx.error);
+        reject(tx.error);
+      };
+    });
   }
 
   // --- Library Tracking ---
@@ -112,7 +148,10 @@ export class YozoraDB {
         }
         resolve(dict);
       };
-      req.onerror = () => resolve({});
+      req.onerror = () => {
+        console.error('IndexedDB getLibrary failed:', req.error);
+        resolve({});
+      };
     });
   }
 
@@ -129,7 +168,10 @@ export class YozoraDB {
     return new Promise((resolve) => {
       const req = index.getAll(epKey);
       req.onsuccess = () => resolve(req.result || []);
-      req.onerror = () => resolve([]);
+      req.onerror = () => {
+        console.error(`IndexedDB getDanmakuForEpisode failed for ${epKey}:`, req.error);
+        resolve([]);
+      };
     });
   }
 
@@ -149,7 +191,10 @@ export class YozoraDB {
     return new Promise((resolve) => {
       const req = store.getAll();
       req.onsuccess = () => resolve(req.result || []);
-      req.onerror = () => resolve([]);
+      req.onerror = () => {
+        console.error('IndexedDB getDownloads failed:', req.error);
+        resolve([]);
+      };
     });
   }
 
@@ -170,15 +215,30 @@ export class YozoraDB {
     return new Promise((resolve) => {
       const req = index.getAll(animeId);
       req.onsuccess = () => resolve(req.result || []);
-      req.onerror = () => resolve([]);
+      req.onerror = () => {
+        console.error(`IndexedDB getSourcesForAnime failed for ${animeId}:`, req.error);
+        resolve([]);
+      };
     });
   }
 
   async saveSources(animeId: string, sources: TorrentSource[]): Promise<void> {
-    const store = await this.getStore('sources_cache', 'readwrite');
+    if (sources.length === 0) return;
+    const db = await this.dbPromise;
+    const tx = db.transaction('sources_cache', 'readwrite');
+    const store = tx.objectStore('sources_cache');
+
     for (const src of sources) {
       store.put({ ...src, animeId });
     }
+
+    return new Promise((resolve, reject) => {
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => {
+        console.error(`IndexedDB saveSources transaction failed for anime ${animeId}:`, tx.error);
+        reject(tx.error);
+      };
+    });
   }
 
   // --- Settings Store ---
@@ -187,7 +247,10 @@ export class YozoraDB {
     return new Promise((resolve) => {
       const req = store.get(key);
       req.onsuccess = () => resolve(req.result ? req.result.value : defaultValue);
-      req.onerror = () => resolve(defaultValue);
+      req.onerror = () => {
+        console.error(`IndexedDB getSetting failed for key ${key}:`, req.error);
+        resolve(defaultValue);
+      };
     });
   }
 

@@ -336,23 +336,23 @@ windowrulev2 = idleinhibit focus, class:^(yozora)$`;
         </form>
       </div>
 
-      {/* 4. AniDB Official Metadata API Integration */}
+      {/* 4. Anime Metadata Provider (AniList GraphQL + AniDB ID Space) */}
       <div style={{ background: 'var(--md-sys-color-surface-container)', border: '1px solid var(--md-sys-color-outline-variant)', borderRadius: '24px', padding: '24px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '8px' }}>
           <Shield size={20} color="#ff9800" />
           <h2 style={{ fontSize: '17px', fontWeight: 700, color: '#fff' }}>
-            AniDB (anidb.net) Official API Credentials
+            Anime Metadata Provider (AniList GraphQL & AniDB Mapping)
           </h2>
         </div>
         <p style={{ fontSize: '13px', color: 'var(--md-sys-color-on-surface-variant)', marginBottom: '16px' }}>
-          AniDB HTTP & UDP protocol client registration with rate limiter flood control (min 2.0s backoff) and local IndexedDB/SQLite cache.
+          Live metadata queries, seasonal airing schedules, and cover imagery are fetched via the public <strong>AniList GraphQL API</strong> with canonical <strong>AniDB ID</strong> space mapping and local 7-day TTL caching.
         </p>
 
         <form onSubmit={handleSaveAniDBCreds}>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px', marginBottom: '14px' }}>
             <div>
               <label style={{ fontSize: '12px', color: 'var(--md-sys-color-on-surface-variant)', display: 'block', marginBottom: '4px' }}>
-                AniDB Registered Client Name
+                AniDB Client Registration Name
               </label>
               <input
                 type="text"

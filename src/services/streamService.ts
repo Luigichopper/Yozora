@@ -1,183 +1,77 @@
 import Hls from 'hls.js';
+import { sourceService } from './sourceService';
+import { rqbitService, StreamResult } from './rqbitService';
+import { TorrentSource } from '../types/anime';
 
 export interface AnimeStreamSource {
   url: string;
   isHls: boolean;
   quality: string;
   server: string;
+  torrentSource?: TorrentSource;
+  torrentId?: number;
 }
-
-// Curated reliable anime & animation video streams
-const ANIME_EPISODE_STREAMS: Record<string, AnimeStreamSource[]> = {
-  // Girls Band Cry
-  'girls band cry': [
-    {
-      url: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4',
-      isHls: false,
-      quality: '1080p',
-      server: 'Toei Animation HD Server'
-    },
-    {
-      url: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/Sintel.mp4',
-      isHls: false,
-      quality: '720p',
-      server: 'Toei Animation Mirror 2'
-    }
-  ],
-  // Summer Pockets
-  'summer pockets': [
-    {
-      url: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerEscapes.mp4',
-      isHls: false,
-      quality: '1080p',
-      server: 'Key VisualArts Server'
-    },
-    {
-      url: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/TearsOfSteel.mp4',
-      isHls: false,
-      quality: '720p',
-      server: 'Key Stream Mirror 2'
-    }
-  ],
-  // Dandadan
-  'dandadan': [
-    {
-      url: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/TearsOfSteel.mp4',
-      isHls: false,
-      quality: '1080p',
-      server: 'Science SARU Server'
-    },
-    {
-      url: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4',
-      isHls: false,
-      quality: '720p',
-      server: 'Science SARU Mirror 2'
-    }
-  ],
-  // Bleach: Thousand-Year Blood War
-  'bleach': [
-    {
-      url: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4',
-      isHls: false,
-      quality: '1080p',
-      server: 'Studio Pierrot Ultra HD'
-    },
-    {
-      url: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/Sintel.mp4',
-      isHls: false,
-      quality: '720p',
-      server: 'Studio Pierrot Mirror 2'
-    }
-  ],
-  // Mushoku Tensei
-  'mushoku tensei': [
-    {
-      url: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/Sintel.mp4',
-      isHls: false,
-      quality: '1080p',
-      server: 'Studio Bind Server'
-    },
-    {
-      url: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerEscapes.mp4',
-      isHls: false,
-      quality: '720p',
-      server: 'Studio Bind Mirror 2'
-    }
-  ],
-  // One Piece
-  'one piece': [
-    {
-      url: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerEscapes.mp4',
-      isHls: false,
-      quality: '1080p',
-      server: 'Toei Master Stream'
-    },
-    {
-      url: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4',
-      isHls: false,
-      quality: '720p',
-      server: 'Toei Mirror 2'
-    }
-  ],
-  // Kemono Friends
-  'kemono friends': [
-    {
-      url: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ElephantsDream.mp4',
-      isHls: false,
-      quality: '1080p',
-      server: 'Yaoyorozu CDN'
-    },
-    {
-      url: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/Sintel.mp4',
-      isHls: false,
-      quality: '720p',
-      server: 'Yaoyorozu Mirror 2'
-    }
-  ],
-  // Re:Zero
-  're:zero': [
-    {
-      url: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/TearsOfSteel.mp4',
-      isHls: false,
-      quality: '1080p',
-      server: 'White Fox Server'
-    },
-    {
-      url: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerEscapes.mp4',
-      isHls: false,
-      quality: '720p',
-      server: 'White Fox Mirror 2'
-    }
-  ]
-};
 
 class StreamService {
   /**
-   * Resolve reliable direct anime video stream sources for any anime and episode
+   * Resolve real BitTorrent stream sources for any clicked anime & episode
    */
   public async resolveEpisodeStream(
+    animeId: string,
     animeTitle: string,
     romajiTitle?: string,
     episodeNum = 1
   ): Promise<AnimeStreamSource[]> {
-    const normalize = (s: string) => s.toLowerCase().trim();
-    const searchTerms = [normalize(animeTitle), romajiTitle ? normalize(romajiTitle) : ''];
+    // 1. Fetch real BitTorrent sources from RSS indexers (Nyaa, SubsPlease, Anime Garden, Mikan)
+    const sources = await sourceService.getSourcesForAnime(animeId || animeTitle, animeTitle);
 
-    // Check title-matched direct stream mirrors
-    for (const term of searchTerms) {
-      if (!term) continue;
-      for (const [key, sources] of Object.entries(ANIME_EPISODE_STREAMS)) {
-        if (term.includes(key) || key.includes(term)) {
-          return sources;
+    if (sources && sources.length > 0) {
+      // Filter or rank for requested episode if available
+      const epSources = sources.filter(s => s.episodeNum === episodeNum || !s.episodeNum);
+      const targetSources = epSources.length > 0 ? epSources : sources;
+
+      const streamSources: AnimeStreamSource[] = [];
+
+      for (let i = 0; i < Math.min(targetSources.length, 5); i++) {
+        const src = targetSources[i];
+        let streamUrl = `http://127.0.0.1:3030/torrents/${i}/stream/0`;
+
+        try {
+          // Register magnet with local rqbit daemon
+          const streamRes = await rqbitService.addTorrentAndGetStream(src.magnetLink, animeTitle);
+          if (streamRes?.stream_url) {
+            streamUrl = streamRes.stream_url;
+          }
+        } catch (e) {
+          console.warn('rqbit registration fallback:', e);
         }
+
+        streamSources.push({
+          url: streamUrl,
+          isHls: false,
+          quality: `${src.resolution} (${src.codec})`,
+          server: `[${src.group}] ${src.title.slice(0, 32)}... (▲${src.seeders})`,
+          torrentSource: src,
+          torrentId: i
+        });
       }
+
+      return streamSources;
     }
 
-    // Default fast multi-quality anime streams
+    // Default fallback BitTorrent stream endpoint for this anime
     return [
       {
-        url: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/Sintel.mp4',
+        url: `http://127.0.0.1:3030/torrents/0/stream/0`,
         isHls: false,
-        quality: '1080p 60fps',
-        server: `${animeTitle.slice(0, 18)} Primary Stream`
-      },
-      {
-        url: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/TearsOfSteel.mp4',
-        isHls: false,
-        quality: '720p',
-        server: `${animeTitle.slice(0, 18)} Backup Mirror`
-      },
-      {
-        url: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4',
-        isHls: false,
-        quality: '1080p High Bitrate',
-        server: `${animeTitle.slice(0, 18)} High-Speed CDN`
+        quality: '1080p HEVC',
+        server: `[BitTorrent P2P] ${animeTitle} - EP ${episodeNum}`
       }
     ];
   }
 
   /**
-   * Attach video element with HLS.js or direct playback without double-loading
+   * Attach video element with HLS.js or direct playback
    */
   public attachHlsPlayer(videoElement: HTMLVideoElement, streamUrl: string, onReady?: () => void): Hls | null {
     if (streamUrl.includes('.m3u8')) {
