@@ -1,0 +1,32 @@
+# Maintainer: Luigi <luigi@archlinux.org>
+pkgname=yozora-bin
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Native Arch/Hyprland anime tracking, browsing, and playback client (pre-compiled release binary)"
+arch=('x86_64')
+url="https://github.com/Luigichopper/Yozora"
+license=('GPL-3.0-or-later')
+depends=(
+  'mpv'
+  'gtk3'
+  'webkit2gtk-4.1'
+  'xdg-desktop-portal-hyprland'
+)
+optdepends=(
+  'matugen: dynamic Material You color palette generation'
+  'rqbit: embedded high-performance BitTorrent streaming daemon'
+)
+provides=('yozora')
+conflicts=('yozora' 'yozora-git')
+source=("yozora-x86_64::https://github.com/Luigichopper/Yozora/releases/download/v${pkgver}/yozora-linux-x86_64"
+        "yozora.desktop"
+        "logo.svg::https://raw.githubusercontent.com/Luigichopper/Yozora/main/public/logo.svg")
+sha256sums=('SKIP'
+            'SKIP'
+            'SKIP')
+
+package() {
+  install -Dm755 "$srcdir/yozora-x86_64" "$pkgdir/usr/bin/yozora"
+  install -Dm644 "$srcdir/yozora.desktop" "$pkgdir/usr/share/applications/yozora.desktop"
+  install -Dm644 "$srcdir/logo.svg" "$pkgdir/usr/share/icons/hicolor/scalable/apps/yozora.svg"
+}

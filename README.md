@@ -74,50 +74,73 @@ flowchart TD
 
 ---
 
-## 🚀 Getting Started
+## 🚀 Installation on Linux
 
-### Prerequisites
-- Node.js (v18+)
-- npm (v9+)
-
-### Arch Linux Quick Install (One-Liner)
+### ⚡ 1. Universal One-Liner (Any Linux Distro)
+Auto-detects your distribution, architecture, dependencies, and installs Yozora with desktop launcher & icon integration:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Luigichopper/Yozora/main/install.sh | bash
 ```
 
-### Arch Linux / AUR Installation (via `makepkg` or `yay`)
+> [!TIP]
+> **Installer Options**:
+> - `--user`: Rootless install to `~/.local/bin` *(default, no `sudo` required)*
+> - `--system`: System-wide install to `/usr/local/bin`
+> - `--appimage`: Download universal AppImage directly
+> - `--deb`: Install prebuilt `.deb` package (Debian / Ubuntu / Mint / Pop!_OS)
+> - `--arch`: Install prebuilt `.pkg.tar.zst` package (Arch / Manjaro / EndeavourOS)
+> - `--uninstall`: Cleanly remove binary, icon, and desktop entry
 
-#### 1. Install directly from local repository:
+---
+
+### 📦 2. Distro-Specific Packages
+
+#### 🍙 Arch Linux (AUR & Pacman)
 ```bash
-# Build and install package using makepkg or yay
-cd aur
-makepkg -si
+# Option A: Install from AUR via yay (Source or Prebuilt Binary)
+yay -S yozora-git    # Build from source
+# OR
+yay -S yozora-bin    # Instant prebuilt binary
+
+# Option B: Local PKGBUILD build
+cd aur && makepkg -si
 ```
 
-#### 2. Install from AUR (once published):
+#### 🍥 Debian / Ubuntu / Linux Mint / Pop!_OS (`.deb`)
+Download the latest `yozora_*_amd64.deb` from [Releases](https://github.com/Luigichopper/Yozora/releases/latest) and install:
 ```bash
-# Install with yay AUR helper
-yay -S yozora-git
+sudo apt update
+sudo apt install ./yozora_*_amd64.deb
 ```
 
-### Manual Development & Build
+#### 📦 Universal AppImage (All Linux Distros)
+Download the standalone `yozora-linux-x86_64.AppImage` from [Releases](https://github.com/Luigichopper/Yozora/releases/latest):
+```bash
+chmod +x yozora-linux-x86_64.AppImage
+./yozora-linux-x86_64.AppImage
+```
+
+---
+
+### 🛠️ 3. Building from Source & Makefile
 
 ```bash
-# Clone repository
+# 1. Clone repository
 git clone https://github.com/Luigichopper/Yozora.git
 cd Yozora
 
-# Install dependencies
-npm install
+# 2. Auto-install required build and runtime dependencies
+make install-deps
 
-# Start local development server
-npm run dev
+# 3. Development / Hot-Reload Server
+make dev
 
-# Build Tauri desktop release
-cd src-tauri
-cargo build --release
+# 4. Build & Install to ~/.local/bin
+make build
+make install
 ```
+
 
 ---
 

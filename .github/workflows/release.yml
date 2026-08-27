@@ -36,17 +36,67 @@ jobs:
       - name: Package Arch Linux .pkg.tar.zst
         run: |
           su builder -c "cd aur && makepkg -s --noconfirm --nodeps"
-          mkdir -p /tmp/dist-linux
-          cp aur/*.pkg.tar.zst /tmp/dist-linux/ || true
-          cp src-tauri/target/release/yozora /tmp/dist-linux/yozora-linux-x86_64
+          mkdir -p /tmp/dist-arch
+          cp aur/*.pkg.tar.zst /tmp/dist-arch/ || true
+          cp src-tauri/target/release/yozora /tmp/dist-arch/yozora-linux-x86_64
+          
+          # Create portable tarball bundle
+          mkdir -p /tmp/yozora-bundle
+          cp src-tauri/target/release/yozora /tmp/yozora-bundle/yozora
+          cp aur/yozora.desktop /tmp/yozora-bundle/
+          cp public/logo.svg /tmp/yozora-bundle/yozora.svg
+          cp install.sh /tmp/yozora-bundle/
+          tar -czf /tmp/dist-arch/yozora-linux-x86_64.tar.gz -C /tmp/yozora-bundle .
 
-      - name: Upload Linux Artifacts
+      - name: Upload Arch & Standalone Linux Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: yozora-linux-artifacts
-          path: /tmp/dist-linux/*
+          name: yozora-arch-linux-artifacts
+          path: /tmp/dist-arch/*
 
-  # 2. Build Windows Release Executable (.exe)
+  # 2. Build Universal AppImage & Debian/Ubuntu Package (.deb)
+  build-deb-and-appimage:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev patchelf libssl-dev
+
+      - name: Install dependencies & build frontend
+        run: |
+          npm install
+          npm run build
+
+      - name: Build Tauri Bundles (AppImage & DEB)
+        run: |
+          npx @tauri-apps/cli@1 build
+
+      - name: Prepare Debian and AppImage artifacts
+        run: |
+          mkdir -p dist-bundles
+          find src-tauri/target/release/bundle/deb -name "*.deb" -exec cp {} dist-bundles/ \; || true
+          find src-tauri/target/release/bundle/appimage -name "*.AppImage" -exec cp {} dist-bundles/yozora-linux-x86_64.AppImage \; || true
+
+      - name: Upload DEB & AppImage Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: yozora-deb-appimage-artifacts
+          path: dist-bundles/*
+
+  # 3. Build Windows Release Executable (.exe)
   build-windows:
     runs-on: windows-latest
     steps:
@@ -83,9 +133,9 @@ jobs:
           name: yozora-windows-artifact
           path: dist-win/yozora-windows-x64.exe
 
-  # 3. Create GitHub Release & Publish All Artifacts
+  # 4. Create GitHub Release & Publish All Artifacts
   publish-release:
-    needs: [build-arch-linux, build-windows]
+    needs: [build-arch-linux, build-deb-and-appimage, build-windows]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -112,3 +162,4 @@ jobs:
           generate_release_notes: true
           draft: false
           prerelease: false
+
