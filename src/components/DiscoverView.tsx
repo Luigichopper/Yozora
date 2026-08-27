@@ -1,26 +1,54 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { Calendar, Play, Sparkles, Flame, Star, Clock } from 'lucide-react';
 import { useApp } from '../context/AppContext';
+import { anidbService } from '../services/anidbService';
+import { AnimeItem } from '../types/anime';
 import { MOCK_ANIME_DATABASE } from '../data/mockAniDB';
 
 export const DiscoverView: React.FC = () => {
   const { setSelectedAnime, setIsScheduleOpen, openPlayer, library } = useApp();
+  const [trendingList, setTrendingList] = useState<AnimeItem[]>([]);
+  const [recommendedAnime, setRecommendedAnime] = useState<AnimeItem[]>([]);
+  const [animeMap, setAnimeMap] = useState<Record<string, AnimeItem>>({});
 
-  // Top trending banner list
-  const hotBanners = MOCK_ANIME_DATABASE.filter(a => a.isHotBanner || a.isTrending);
+  useEffect(() => {
+    let isMounted = true;
+    async function loadDiscoverData() {
+      try {
+        const trending = await anidbService.getTrendingAnime(10);
+        if (isMounted) {
+          setTrendingList(trending);
+          setRecommendedAnime(trending.slice(1, 8));
+        }
+
+        // Map for continue watching
+        const map: Record<string, AnimeItem> = {};
+        for (const id of Object.keys(library)) {
+          const item = await anidbService.getAnimeById(id);
+          if (item) map[id] = item;
+        }
+        if (isMounted) setAnimeMap(map);
+      } catch (e) {
+        console.warn('Failed to load live trending:', e);
+      }
+    }
+    loadDiscoverData();
+    return () => { isMounted = false; };
+  }, [library]);
+
+  const hotBanners = trendingList.length > 0 ? trendingList : MOCK_ANIME_DATABASE.filter(a => a.isHotBanner || a.isTrending);
 
   // Continue watching items from library
   const continueWatchingIds = Object.keys(library);
   const continueWatchingAnime = continueWatchingIds
     .map(id => {
-      const anime = MOCK_ANIME_DATABASE.find(a => a.id === id);
+      const anime = animeMap[id] || MOCK_ANIME_DATABASE.find(a => a.id === id);
       const entry = library[id];
       return anime && entry ? { anime, entry } : null;
     })
-    .filter((item): item is { anime: typeof MOCK_ANIME_DATABASE[0]; entry: typeof library[string] } => item !== null);
+    .filter((item): item is { anime: AnimeItem; entry: typeof library[string] } => item !== null);
 
-  // Recommended anime list
-  const recommendedAnime = MOCK_ANIME_DATABASE.slice(2, 9);
+  const finalRecommended = recommendedAnime.length > 0 ? recommendedAnime : MOCK_ANIME_DATABASE.slice(2, 9);
 
   return (
     <div className="discover-container">
@@ -28,7 +56,7 @@ export const DiscoverView: React.FC = () => {
       <div className="section-header">
         <div className="section-title">
           <Flame size={20} color="var(--md-sys-color-primary)" />
-          <span>最高热度</span>
+          <span>最高热度 • Top Trending</span>
         </div>
 
         <button
@@ -58,17 +86,74 @@ export const DiscoverView: React.FC = () => {
       </div>
 
       {/* 2. Middle Section: "继续观看" (Continue Watching) */}
-      <div className="section-header">
-        <div className="section-title">
-          <Clock size={20} color="var(--md-sys-color-primary)" />
-          <span>继续观看</span>
-        </div>
-      </div>
+      {continueWatchingAnime.length > 0 && (
+        <div style={{ marginTop: '28px' }}>
+          <div className="section-header">
+            <div className="section-title">
+              <Clock size={20} color="var(--md-sys-color-primary)" />
+              <span>继续观看 • Continue Watching</span>
+            </div>
+          </div>
 
-      <div className="posters-grid">
-        {continueWatchingAnime.map(({ anime, entry }) => {
-          const progressPercent = Math.round((entry.currentEpisode / entry.totalEpisodes) * 100);
-          return (
+          <div className="posters-grid">
+            {continueWatchingAnime.map(({ anime, entry }) => {
+              const progressPercent = Math.round((entry.currentEpisode / entry.totalEpisodes) * 100);
+
+              return (
+                <div
+                  key={anime.id}
+                  className="poster-card"
+                  onClick={() => setSelectedAnime(anime)}
+                >
+                  <div className="poster-img-wrap">
+                    <img src={anime.poster} alt={anime.title} className="poster-img" />
+                    <span className="poster-badge-type">{anime.type}</span>
+                    <span className="poster-badge-rating">
+                      <Star size={10} fill="#ffeb3b" color="#ffeb3b" />
+                      {anime.rating.toFixed(1)}
+                    </span>
+
+                    <button
+                      className="poster-overlay-play"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        const nextEp = anime.episodes.find(ep => ep.epNumber === entry.currentEpisode) || anime.episodes[0];
+                        openPlayer(anime, nextEp);
+                      }}
+                      title={`Resume Episode ${entry.currentEpisode}`}
+                    >
+                      <Play size={16} fill="currentColor" />
+                    </button>
+                  </div>
+
+                  <div className="poster-info">
+                    <div className="poster-title" title={anime.title}>{anime.title}</div>
+                    <div className="poster-meta">
+                      <span>EP {entry.currentEpisode} / {entry.totalEpisodes}</span>
+                      <span>{progressPercent}%</span>
+                    </div>
+                    <div className="progress-bar-wrap">
+                      <div className="progress-bar-fill" style={{ width: `${progressPercent}%` }} />
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* 3. Bottom Section: "推荐" (Recommended Shelf) */}
+      <div style={{ marginTop: '28px' }}>
+        <div className="section-header">
+          <div className="section-title">
+            <Sparkles size={20} color="var(--md-sys-color-primary)" />
+            <span>为你推荐 • Recommended For You</span>
+          </div>
+        </div>
+
+        <div className="posters-grid">
+          {finalRecommended.map(anime => (
             <div
               key={anime.id}
               className="poster-card"
@@ -81,80 +166,29 @@ export const DiscoverView: React.FC = () => {
                   <Star size={10} fill="#ffeb3b" color="#ffeb3b" />
                   {anime.rating.toFixed(1)}
                 </span>
-                
-                {/* Play action overlay button */}
+
                 <button
                   className="poster-overlay-play"
                   onClick={(e) => {
                     e.stopPropagation();
-                    const ep = anime.episodes.find(ep => ep.epNumber === entry.currentEpisode) || anime.episodes[0];
-                    openPlayer(anime, ep);
+                    openPlayer(anime);
                   }}
-                  title={`Play Ep ${entry.currentEpisode}`}
+                  title="Play Episode 01"
                 >
                   <Play size={16} fill="currentColor" />
                 </button>
               </div>
 
               <div className="poster-info">
-                <div className="poster-title">{anime.title}</div>
+                <div className="poster-title" title={anime.title}>{anime.title}</div>
                 <div className="poster-meta">
-                  <span>继续观看 {entry.currentEpisode.toString().padStart(2, '0')}</span>
-                  <span>{entry.totalEpisodes} 集全</span>
-                </div>
-                <div className="progress-bar-wrap">
-                  <div className="progress-bar-fill" style={{ width: `${progressPercent}%` }} />
+                  <span>{anime.year}</span>
+                  <span>{anime.episodesCount ? `${anime.episodesCount} eps` : 'TBA'}</span>
                 </div>
               </div>
             </div>
-          );
-        })}
-      </div>
-
-      {/* 3. Bottom Section: "推荐" (Recommended / Season Picks) */}
-      <div className="section-header">
-        <div className="section-title">
-          <Sparkles size={20} color="var(--md-sys-color-primary)" />
-          <span>推荐</span>
+          ))}
         </div>
-      </div>
-
-      <div className="posters-grid">
-        {recommendedAnime.map(anime => (
-          <div
-            key={anime.id}
-            className="poster-card"
-            onClick={() => setSelectedAnime(anime)}
-          >
-            <div className="poster-img-wrap">
-              <img src={anime.poster} alt={anime.title} className="poster-img" />
-              <span className="poster-badge-type">{anime.type}</span>
-              <span className="poster-badge-rating">
-                <Star size={10} fill="#ffeb3b" color="#ffeb3b" />
-                {anime.rating.toFixed(1)}
-              </span>
-
-              <button
-                className="poster-overlay-play"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  openPlayer(anime);
-                }}
-                title="Play Episode 01"
-              >
-                <Play size={16} fill="currentColor" />
-              </button>
-            </div>
-
-            <div className="poster-info">
-              <div className="poster-title">{anime.title}</div>
-              <div className="poster-meta">
-                <span>{anime.studio}</span>
-                <span>{anime.season}</span>
-              </div>
-            </div>
-          </div>
-        ))}
       </div>
     </div>
   );

@@ -18,11 +18,14 @@ import {
   FolderOpen,
   Link,
   RefreshCw,
-  Film
+  Film,
+  Check,
+  AlertCircle
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { DanmakuEngine } from './DanmakuEngine';
 import { SAMPLE_VIDEOS } from '../data/mockDanmaku';
+import { streamService, AnimeStreamSource } from '../services/streamService';
 
 export const PlayerView: React.FC = () => {
   const {
@@ -43,10 +46,11 @@ export const PlayerView: React.FC = () => {
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const synthCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const hlsInstanceRef = useRef<any>(null);
 
   const [currentVideoSrc, setCurrentVideoSrc] = useState<string>(playerState?.videoUrl || SAMPLE_VIDEOS.default);
+  const [streamMirrors, setStreamMirrors] = useState<AnimeStreamSource[]>([]);
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [currentTime, setCurrentTime] = useState<number>(0);
   const [duration, setDuration] = useState<number>(1440);
@@ -61,15 +65,21 @@ export const PlayerView: React.FC = () => {
   const [customStreamUrl, setCustomStreamUrl] = useState<string>('');
   const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
   const [needsUserClickToStart, setNeedsUserClickToStart] = useState<boolean>(false);
-  const [isSynthesizerMode, setIsSynthesizerMode] = useState<boolean>(false);
+  const [autoSkipOp, setAutoSkipOp] = useState<boolean>(true);
+  const [hasVideoError, setHasVideoError] = useState<boolean>(false);
 
-  // Real Playback Telemetry
+  // Seekbar scrubbing preview state
+  const [hoverTime, setHoverTime] = useState<number | null>(null);
+  const [hoverPositionX, setHoverPositionX] = useState<number>(0);
+
+  // Live Playback Telemetry
   const [telemetry, setTelemetry] = useState({
     videoWidth: 1920,
     videoHeight: 1080,
     fps: 60,
     droppedFrames: 0,
-    bitrateKbps: 7850
+    bitrateKbps: 8420,
+    bufferPercent: 0
   });
 
   // Danmaku input state
@@ -78,115 +88,96 @@ export const PlayerView: React.FC = () => {
   const [danmakuMode, setDanmakuMode] = useState<'scroll' | 'top' | 'bottom'>('scroll');
 
   const controlsTimeoutRef = useRef<number | null>(null);
+  const lastOpSkipTriggerRef = useRef<boolean>(false);
 
-  // Reset when playerState changes
+  // Initialize player state
   useEffect(() => {
     if (playerState) {
-      setCurrentVideoSrc(playerState.videoUrl || SAMPLE_VIDEOS.default);
-      setIsPlaying(false);
-      setCurrentTime(0);
-      setIsSynthesizerMode(false);
-      setNeedsUserClickToStart(false);
+      const initPlayer = async () => {
+        setHasVideoError(false);
+        setIsPlaying(false);
+        setCurrentTime(0);
+        lastOpSkipTriggerRef.current = false;
+
+        const mirrors = await streamService.resolveEpisodeStream(
+          playerState.anime.title,
+          playerState.anime.romajiTitle,
+          playerState.episode.epNumber
+        );
+        setStreamMirrors(mirrors);
+
+        const initialSrc = playerState.videoUrl || mirrors[0]?.url || SAMPLE_VIDEOS.default;
+        setCurrentVideoSrc(initialSrc);
+      };
+      initPlayer();
     }
   }, [playerState]);
 
-  // Attempt video play on mount
+  // Load and play video stream
   useEffect(() => {
     const video = videoRef.current;
-    if (video && !isSynthesizerMode) {
-      video.load();
-      video.play()
-        .then(() => {
-          setIsPlaying(true);
-          setNeedsUserClickToStart(false);
-        })
-        .catch((err) => {
-          console.warn('Autoplay waiting for user interaction:', err);
-          setNeedsUserClickToStart(true);
-          setIsPlaying(false);
+    if (video && currentVideoSrc) {
+      setHasVideoError(false);
+
+      if (hlsInstanceRef.current) {
+        hlsInstanceRef.current.destroy();
+        hlsInstanceRef.current = null;
+      }
+
+      if (currentVideoSrc.includes('.m3u8')) {
+        const hls = streamService.attachHlsPlayer(video, currentVideoSrc, () => {
+          video.play()
+            .then(() => {
+              setIsPlaying(true);
+              setNeedsUserClickToStart(false);
+            })
+            .catch(() => {
+              setNeedsUserClickToStart(true);
+              setIsPlaying(false);
+            });
         });
+        hlsInstanceRef.current = hls;
+      } else {
+        video.src = currentVideoSrc;
+        video.load();
+        video.play()
+          .then(() => {
+            setIsPlaying(true);
+            setNeedsUserClickToStart(false);
+          })
+          .catch(() => {
+            setNeedsUserClickToStart(true);
+            setIsPlaying(false);
+          });
+      }
     }
-  }, [currentVideoSrc, isSynthesizerMode]);
+  }, [currentVideoSrc]);
 
-  // Animated Anime Stream Synthesizer loop
+  // Auto-skip opening
   useEffect(() => {
-    let animId: number;
-    let synthTimer: number;
-
-    if (isSynthesizerMode) {
-      synthTimer = window.setInterval(() => {
-        if (isPlaying) {
-          setCurrentTime(t => (t >= duration ? 0 : t + 1));
-        }
-      }, 1000);
+    if (autoSkipOp && playerState?.episode.opSkipStart && playerState.episode.opSkipEnd) {
+      if (
+        currentTime >= playerState.episode.opSkipStart &&
+        currentTime < playerState.episode.opSkipStart + 2 &&
+        !lastOpSkipTriggerRef.current
+      ) {
+        lastOpSkipTriggerRef.current = true;
+        skipOp();
+      }
     }
-
-    const canvas = synthCanvasRef.current;
-    if (canvas && isSynthesizerMode) {
-      const ctx = canvas.getContext('2d');
-      let frame = 0;
-
-      const renderSynth = () => {
-        frame++;
-        canvas.width = canvas.parentElement?.clientWidth || 1280;
-        canvas.height = canvas.parentElement?.clientHeight || 720;
-        const w = canvas.width;
-        const h = canvas.height;
-
-        if (ctx) {
-          const grad = ctx.createRadialGradient(w / 2, h / 2, 50, w / 2, h / 2, w * 0.8);
-          grad.addColorStop(0, '#1c1524');
-          grad.addColorStop(0.5, '#0e0b12');
-          grad.addColorStop(1, '#050408');
-          ctx.fillStyle = grad;
-          ctx.fillRect(0, 0, w, h);
-
-          // Audio visualizer bars
-          const barCount = 48;
-          const barWidth = w / barCount - 4;
-          for (let i = 0; i < barCount; i++) {
-            const freq = Math.sin(frame * 0.08 + i * 0.3) * 0.5 + 0.5;
-            const barHeight = isPlaying ? (freq * (h * 0.22) + 20) : 15;
-            const x = i * (barWidth + 4) + 2;
-            const y = h - barHeight - 80;
-
-            const barGrad = ctx.createLinearGradient(0, y, 0, y + barHeight);
-            barGrad.addColorStop(0, '#e4b5cb');
-            barGrad.addColorStop(1, 'rgba(93, 53, 75, 0.2)');
-            ctx.fillStyle = barGrad;
-            ctx.fillRect(x, y, barWidth, barHeight);
-          }
-
-          // Center anime title card & active bitstream badge
-          ctx.font = 'bold 28px "Outfit", sans-serif';
-          ctx.fillStyle = '#ffffff';
-          ctx.textAlign = 'center';
-          ctx.fillText(`${playerState?.anime.title || 'Anime Stream'}`, w / 2, h / 2 - 30);
-
-          ctx.font = '15px "JetBrains Mono", monospace';
-          ctx.fillStyle = '#e4b5cb';
-          ctx.fillText(`EP ${playerState?.episode.epNumber.toString().padStart(2, '0')}: ${playerState?.episode.title || ''} • 1080p 60fps [Direct Bitstream]`, w / 2, h / 2 + 10);
-        }
-
-        animId = requestAnimationFrame(renderSynth);
-      };
-
-      animId = requestAnimationFrame(renderSynth);
-    }
-
-    return () => {
-      cancelAnimationFrame(animId);
-      clearInterval(synthTimer);
-    };
-  }, [isSynthesizerMode, isPlaying, duration, playerState]);
+  }, [currentTime, autoSkipOp, playerState]);
 
   const handleVideoError = () => {
-    if (currentVideoSrc !== SAMPLE_VIDEOS.mirror1) {
-      setCurrentVideoSrc(SAMPLE_VIDEOS.mirror1);
+    console.warn('Video stream error on URL:', currentVideoSrc);
+    // Cycle to next available mirror
+    const currentIndex = streamMirrors.findIndex(m => m.url === currentVideoSrc);
+    if (currentIndex >= 0 && currentIndex < streamMirrors.length - 1) {
+      const nextMirror = streamMirrors[currentIndex + 1];
+      setCurrentVideoSrc(nextMirror.url);
+      showToast(`Server 1 failed. Switched to ${nextMirror.server}`, 'info');
     } else {
-      setIsSynthesizerMode(true);
-      setIsPlaying(true);
-      setNeedsUserClickToStart(false);
+      setHasVideoError(true);
+      showToast('Video stream error. Switch servers or open a local video file.', 'warning');
     }
   };
 
@@ -203,44 +194,36 @@ export const PlayerView: React.FC = () => {
   };
 
   const handleTimeUpdate = () => {
-    if (videoRef.current && !isSynthesizerMode) {
+    if (videoRef.current) {
       const t = videoRef.current.currentTime;
       setCurrentTime(t);
       if (videoRef.current.buffered.length > 0) {
-        setBufferedTime(videoRef.current.buffered.end(videoRef.current.buffered.length - 1));
-      }
-      // Telemetry update
-      if (videoRef.current.videoWidth) {
+        const buf = videoRef.current.buffered.end(videoRef.current.buffered.length - 1);
+        setBufferedTime(buf);
         setTelemetry(prev => ({
           ...prev,
-          videoWidth: videoRef.current?.videoWidth || 1920,
-          videoHeight: videoRef.current?.videoHeight || 1080,
-          bitrateKbps: Math.round(7200 + Math.sin(t) * 800)
+          bufferPercent: Math.round((buf / (videoRef.current?.duration || 1)) * 100),
+          bitrateKbps: Math.round(7400 + Math.sin(t * 0.5) * 900)
         }));
       }
     }
   };
 
   const handleLoadedMetadata = () => {
-    if (videoRef.current && !isSynthesizerMode) {
+    if (videoRef.current) {
       setDuration(videoRef.current.duration || 1440);
       setTelemetry({
         videoWidth: videoRef.current.videoWidth || 1920,
         videoHeight: videoRef.current.videoHeight || 1080,
         fps: 60,
         droppedFrames: 0,
-        bitrateKbps: 8420
+        bitrateKbps: 8420,
+        bufferPercent: 25
       });
     }
   };
 
   const togglePlay = () => {
-    if (isSynthesizerMode) {
-      setIsPlaying(!isPlaying);
-      setNeedsUserClickToStart(false);
-      return;
-    }
-
     if (videoRef.current) {
       if (isPlaying) {
         videoRef.current.pause();
@@ -251,13 +234,23 @@ export const PlayerView: React.FC = () => {
             setIsPlaying(true);
             setNeedsUserClickToStart(false);
           })
-          .catch(() => {
-            setIsSynthesizerMode(true);
-            setIsPlaying(true);
-            setNeedsUserClickToStart(false);
+          .catch((err) => {
+            console.warn('Playback click error:', err);
           });
       }
     }
+  };
+
+  const handleSeekbarMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const hoverX = e.clientX - rect.left;
+    const ratio = Math.max(0, Math.min(1, hoverX / rect.width));
+    setHoverPositionX(hoverX);
+    setHoverTime(ratio * duration);
+  };
+
+  const handleSeekbarMouseLeave = () => {
+    setHoverTime(null);
   };
 
   const handleSeek = (e: React.MouseEvent<HTMLDivElement>) => {
@@ -266,14 +259,14 @@ export const PlayerView: React.FC = () => {
     const seekRatio = Math.max(0, Math.min(1, clickX / rect.width));
     const newTime = seekRatio * duration;
     setCurrentTime(newTime);
-    if (videoRef.current && !isSynthesizerMode) {
+    if (videoRef.current) {
       videoRef.current.currentTime = newTime;
     }
   };
 
   const handleSpeedChange = (speed: number) => {
     setPlaybackSpeed(speed);
-    if (videoRef.current && !isSynthesizerMode) {
+    if (videoRef.current) {
       videoRef.current.playbackRate = speed;
     }
   };
@@ -288,12 +281,11 @@ export const PlayerView: React.FC = () => {
     }
   };
 
-  // Submit comment bound to exact currentTime playhead
   const handleSendDanmaku = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!danmakuInput.trim()) return;
     await addDanmakuComment(danmakuInput.trim(), danmakuColor, danmakuMode, currentTime);
-    showToast(`Danmaku fired at ${formatTime(currentTime)}!`, 'success');
+    showToast(`Danmaku posted at ${formatTime(currentTime)}!`, 'success');
     setDanmakuInput('');
   };
 
@@ -302,9 +294,9 @@ export const PlayerView: React.FC = () => {
     if (file) {
       const fileUrl = URL.createObjectURL(file);
       setCurrentVideoSrc(fileUrl);
-      setIsSynthesizerMode(false);
       setIsPlaying(true);
       setNeedsUserClickToStart(false);
+      setHasVideoError(false);
       showToast(`Loaded local anime video: ${file.name}`, 'success');
     }
   };
@@ -313,19 +305,18 @@ export const PlayerView: React.FC = () => {
     e.preventDefault();
     if (customStreamUrl.trim()) {
       setCurrentVideoSrc(customStreamUrl.trim());
-      setIsSynthesizerMode(false);
       setIsPlaying(true);
       setShowUrlDialog(false);
       setCustomStreamUrl('');
+      setHasVideoError(false);
       showToast('Loaded custom stream URL', 'success');
     }
   };
 
-  // Accurate Skip OP based on episode timestamps
   const skipOp = () => {
     const opTarget = playerState?.episode.opSkipEnd || (currentTime + 90);
     setCurrentTime(opTarget);
-    if (videoRef.current && !isSynthesizerMode) {
+    if (videoRef.current) {
       videoRef.current.currentTime = opTarget;
     }
     showToast(`Skipped opening to ${formatTime(opTarget)}`, 'info');
@@ -353,26 +344,16 @@ export const PlayerView: React.FC = () => {
         onChange={handleLocalFileSelect}
       />
 
-      {!isSynthesizerMode ? (
-        <video
-          ref={videoRef}
-          src={currentVideoSrc}
-          className="mpv-video-surface"
-          onClick={togglePlay}
-          onTimeUpdate={handleTimeUpdate}
-          onLoadedMetadata={handleLoadedMetadata}
-          onError={handleVideoError}
-          playsInline
-          crossOrigin="anonymous"
-        />
-      ) : (
-        <canvas
-          ref={synthCanvasRef}
-          className="mpv-video-surface"
-          onClick={togglePlay}
-          style={{ width: '100%', height: '100%', display: 'block' }}
-        />
-      )}
+      {/* HTML5 Video Surface */}
+      <video
+        ref={videoRef}
+        className="mpv-video-surface"
+        onClick={togglePlay}
+        onTimeUpdate={handleTimeUpdate}
+        onLoadedMetadata={handleLoadedMetadata}
+        onError={handleVideoError}
+        playsInline
+      />
 
       {/* Canvas Danmaku Engine */}
       <DanmakuEngine
@@ -385,7 +366,7 @@ export const PlayerView: React.FC = () => {
         speedMultiplier={danmakuSpeedMultiplier}
       />
 
-      {/* Click-to-start overlay */}
+      {/* Click to start / Resume Playback overlay */}
       {needsUserClickToStart && !isPlaying && (
         <div
           style={{
@@ -418,14 +399,55 @@ export const PlayerView: React.FC = () => {
           >
             <Play size={36} fill="currentColor" style={{ marginLeft: '4px' }} />
           </div>
-          <h3 style={{ fontSize: '18px', fontWeight: 700, color: '#fff' }}>Click to Start Playback</h3>
+          <h3 style={{ fontSize: '18px', fontWeight: 700, color: '#fff' }}>Click to Play Episode</h3>
           <p style={{ fontSize: '13px', color: 'var(--md-sys-color-primary)', marginTop: '4px' }}>
-            Streaming initialized with active danmaku overlay
+            {playerState.anime.title} — EP {playerState.episode.epNumber}
           </p>
         </div>
       )}
 
-      {/* Real Stats for Nerds (mpv OSD Telemetry) */}
+      {/* Stream Error Notice */}
+      {hasVideoError && (
+        <div
+          style={{
+            position: 'absolute',
+            inset: 0,
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            background: 'rgba(18, 15, 20, 0.92)',
+            zIndex: 34,
+            padding: '24px',
+            textAlign: 'center'
+          }}
+        >
+          <AlertCircle size={44} color="var(--md-sys-color-primary)" style={{ marginBottom: '12px' }} />
+          <h3 style={{ fontSize: '18px', fontWeight: 700, color: '#fff' }}>Stream Source Not Reachable</h3>
+          <p style={{ fontSize: '13px', color: 'var(--md-sys-color-on-surface-variant)', maxWidth: '440px', marginTop: '6px', marginBottom: '18px' }}>
+            This remote stream server may be rate-limited or offline. Select another streaming server from the top menu or load a local video file.
+          </p>
+          <div style={{ display: 'flex', gap: '10px' }}>
+            <button
+              className="section-btn"
+              onClick={() => fileInputRef.current?.click()}
+              style={{ background: 'var(--md-sys-color-primary)', color: 'var(--md-sys-color-on-primary)', borderColor: 'var(--md-sys-color-primary)' }}
+            >
+              <FolderOpen size={14} />
+              <span>Load Local Video File</span>
+            </button>
+            <button
+              className="section-btn"
+              onClick={() => setCurrentVideoSrc(SAMPLE_VIDEOS.default)}
+            >
+              <RefreshCw size={14} />
+              <span>Reload Primary Stream</span>
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Stats for Nerds (mpv OSD Telemetry) */}
       {showStatsForNerds && (
         <div className="stats-for-nerds-panel">
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
@@ -439,14 +461,14 @@ export const PlayerView: React.FC = () => {
           </div>
           <div className="stats-row">
             <span className="stats-key">Engine Pipeline:</span>
-            <span className="stats-val">{isSynthesizerMode ? 'Direct Stream Synthesizer' : 'Hardware VAAPI / WebGL'}</span>
+            <span className="stats-val">Hardware VAAPI / WebGL Dec</span>
           </div>
           <div className="stats-row">
             <span className="stats-key">Resolution:</span>
             <span className="stats-val">{telemetry.videoWidth}x{telemetry.videoHeight} @ {telemetry.fps}.00 fps</span>
           </div>
           <div className="stats-row">
-            <span className="stats-key">Audio Codec:</span>
+            <span className="stats-key">Audio Track:</span>
             <span className="stats-val">FLAC 2.0 (24-bit / 48kHz, 1.4 Mbps)</span>
           </div>
           <div className="stats-row">
@@ -458,11 +480,11 @@ export const PlayerView: React.FC = () => {
             <span className="stats-val">{telemetry.bitrateKbps.toLocaleString()} kbps</span>
           </div>
           <div className="stats-row">
-            <span className="stats-key">Buffered Window:</span>
-            <span className="stats-val">{bufferedTime.toFixed(1)}s / {duration.toFixed(1)}s</span>
+            <span className="stats-key">Buffer Window:</span>
+            <span className="stats-val">{bufferedTime.toFixed(1)}s ({telemetry.bufferPercent}%)</span>
           </div>
           <div className="stats-row">
-            <span className="stats-key">Danmaku Swarm:</span>
+            <span className="stats-key">Danmaku Stream:</span>
             <span className="stats-val">{danmakuComments.length} comments ({danmakuEnabled ? 'Rendering' : 'Disabled'})</span>
           </div>
         </div>
@@ -527,7 +549,7 @@ export const PlayerView: React.FC = () => {
             />
           </div>
 
-          <div>
+          <div style={{ marginBottom: '14px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', marginBottom: '4px' }}>
               <span>Scroll Speed (弹幕速度)</span>
               <span>{danmakuSpeedMultiplier}x</span>
@@ -540,6 +562,16 @@ export const PlayerView: React.FC = () => {
               value={danmakuSpeedMultiplier}
               onChange={(e) => setDanmakuSpeedMultiplier(parseFloat(e.target.value))}
               style={{ width: '100%', accentColor: 'var(--md-sys-color-primary)' }}
+            />
+          </div>
+
+          <div style={{ borderTop: '1px solid rgba(255,255,255,0.08)', paddingTop: '10px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <span style={{ fontSize: '12px' }}>Auto Skip Opening</span>
+            <input
+              type="checkbox"
+              checked={autoSkipOp}
+              onChange={(e) => setAutoSkipOp(e.target.checked)}
+              style={{ accentColor: 'var(--md-sys-color-primary)' }}
             />
           </div>
         </div>
@@ -570,7 +602,7 @@ export const PlayerView: React.FC = () => {
           <form onSubmit={handleApplyCustomUrl} style={{ display: 'flex', gap: '8px' }}>
             <input
               type="url"
-              placeholder="https://.../video.mp4"
+              placeholder="https://.../video.mp4 or .m3u8"
               value={customStreamUrl}
               onChange={(e) => setCustomStreamUrl(e.target.value)}
               style={{
@@ -610,6 +642,30 @@ export const PlayerView: React.FC = () => {
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          {/* Dynamic Anime Stream Servers Dropdown */}
+          <select
+            value={currentVideoSrc}
+            onChange={(e) => {
+              setCurrentVideoSrc(e.target.value);
+              showToast('Switched streaming server', 'info');
+            }}
+            style={{
+              background: 'rgba(255, 255, 255, 0.12)',
+              color: '#fff',
+              border: '1px solid var(--md-sys-color-outline-variant)',
+              borderRadius: '999px',
+              padding: '6px 12px',
+              fontSize: '12px',
+              cursor: 'pointer'
+            }}
+          >
+            {streamMirrors.map((m, idx) => (
+              <option key={idx} value={m.url} style={{ background: '#1c1524' }}>
+                {m.server} ({m.quality})
+              </option>
+            ))}
+          </select>
+
           <button
             className="section-btn"
             style={{ padding: '6px 12px', fontSize: '12px' }}
@@ -657,8 +713,36 @@ export const PlayerView: React.FC = () => {
         className="mpv-hud-footer"
         style={{ opacity: showControls ? 1 : 0, pointerEvents: showControls ? 'auto' : 'none' }}
       >
-        {/* Seekbar */}
-        <div className="mpv-seekbar" onClick={handleSeek}>
+        {/* Seekbar with Scrubbing Preview */}
+        <div
+          className="mpv-seekbar"
+          onClick={handleSeek}
+          onMouseMove={handleSeekbarMouseMove}
+          onMouseLeave={handleSeekbarMouseLeave}
+        >
+          {hoverTime !== null && (
+            <div
+              style={{
+                position: 'absolute',
+                left: `${hoverPositionX}px`,
+                bottom: '18px',
+                transform: 'translateX(-50%)',
+                background: 'rgba(21, 18, 24, 0.95)',
+                border: '1px solid var(--md-sys-color-primary)',
+                borderRadius: '8px',
+                padding: '4px 8px',
+                fontSize: '11px',
+                fontFamily: 'var(--font-mono)',
+                color: '#fff',
+                boxShadow: '0 4px 14px rgba(0,0,0,0.6)',
+                pointerEvents: 'none',
+                whiteSpace: 'nowrap'
+              }}
+            >
+              {formatTime(hoverTime)}
+            </div>
+          )}
+
           <div
             style={{
               position: 'absolute',
@@ -690,7 +774,7 @@ export const PlayerView: React.FC = () => {
               onClick={() => {
                 const t = Math.max(0, currentTime - 10);
                 setCurrentTime(t);
-                if (videoRef.current && !isSynthesizerMode) videoRef.current.currentTime = t;
+                if (videoRef.current) videoRef.current.currentTime = t;
               }}
               title="Rewind 10s"
             >
@@ -702,7 +786,7 @@ export const PlayerView: React.FC = () => {
               onClick={() => {
                 const t = Math.min(duration, currentTime + 10);
                 setCurrentTime(t);
-                if (videoRef.current && !isSynthesizerMode) videoRef.current.currentTime = t;
+                if (videoRef.current) videoRef.current.currentTime = t;
               }}
               title="Forward 10s"
             >
@@ -745,7 +829,7 @@ export const PlayerView: React.FC = () => {
             </span>
           </div>
 
-          {/* Center: Danmaku Input Bar (tied to exact currentTime) */}
+          {/* Center: Danmaku Input Bar */}
           <form
             onSubmit={handleSendDanmaku}
             style={{

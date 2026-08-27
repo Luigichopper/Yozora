@@ -14,6 +14,7 @@ import { db } from '../services/db';
 import { anidbService } from '../services/anidbService';
 import { sourceService } from '../services/sourceService';
 import { danmakuService } from '../services/danmakuService';
+import { streamService } from '../services/streamService';
 import { SAMPLE_VIDEOS } from '../data/mockDanmaku';
 
 export type ActiveView = 'discover' | 'browse' | 'library' | 'cache' | 'settings';
@@ -143,7 +144,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     await db.saveSetting('yozora_palette_id', palette.id);
   };
 
-  // Open Player with episode & load its specific danmaku from DB
+  // Open Player with episode & dynamically resolve real stream for this anime
   const openPlayer = async (anime: AnimeItem, episode?: Episode, videoUrl?: string, sourceTitle?: string) => {
     const ep = episode || (anime.episodes && anime.episodes.length > 0 ? anime.episodes[0] : {
       id: 1,
@@ -155,7 +156,12 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       opSkipEnd: 180
     });
     
-    const chosenVideo = videoUrl || SAMPLE_VIDEOS.default;
+    // Resolve authentic video stream for this specific anime & episode
+    let chosenVideo = videoUrl;
+    if (!chosenVideo) {
+      const resolvedStreams = await streamService.resolveEpisodeStream(anime.title, anime.romajiTitle, ep.epNumber);
+      chosenVideo = resolvedStreams[0]?.url || SAMPLE_VIDEOS.default;
+    }
     
     // Load danmaku comments for this exact episode from danmakuService
     const comments = await danmakuService.getDanmaku(anime.id, ep.epNumber);

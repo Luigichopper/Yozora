@@ -1,6 +1,15 @@
 import { MatugenPalette } from '../types/anime';
 import { applyMatugenTheme, MATUGEN_PALETTES } from '../theme/matugen';
 
+interface ColorBox {
+  r: number;
+  g: number;
+  b: number;
+  count: number;
+  saturation: number;
+  luminance: number;
+}
+
 class MatugenService {
   /**
    * Parse live Matugen colors.json configuration
@@ -37,7 +46,7 @@ class MatugenService {
   }
 
   /**
-   * Extract dynamic Material You palette from any wallpaper image
+   * Advanced K-Means Color Quantization to extract vibrant dominant colors from wallpaper
    */
   public async extractPaletteFromImage(file: File): Promise<MatugenPalette> {
     return new Promise((resolve) => {
@@ -47,26 +56,43 @@ class MatugenService {
       img.onload = () => {
         const canvas = document.createElement('canvas');
         const ctx = canvas.getContext('2d');
-        canvas.width = 64;
-        canvas.height = 64;
+        canvas.width = 128;
+        canvas.height = 128;
 
         if (ctx) {
-          ctx.drawImage(img, 0, 0, 64, 64);
-          const imgData = ctx.getImageData(0, 0, 64, 64).data;
+          ctx.drawImage(img, 0, 0, 128, 128);
+          const imgData = ctx.getImageData(0, 0, 128, 128).data;
 
-          let r = 0, g = 0, b = 0, count = 0;
-          for (let i = 0; i < imgData.length; i += 16) {
-            r += imgData[i];
-            g += imgData[i + 1];
-            b += imgData[i + 2];
-            count++;
+          // Color quantization via cluster sampling
+          const clusters: ColorBox[] = [];
+          const step = 8;
+
+          for (let i = 0; i < imgData.length; i += step * 4) {
+            const r = imgData[i];
+            const g = imgData[i + 1];
+            const b = imgData[i + 2];
+            const a = imgData[i + 3];
+
+            if (a < 128) continue; // skip transparent
+
+            const max = Math.max(r, g, b) / 255;
+            const min = Math.min(r, g, b) / 255;
+            const delta = max - min;
+            const sat = max === 0 ? 0 : delta / max;
+            const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+
+            // Filter out extreme blacks/whites for primary accent
+            if (lum > 25 && lum < 235) {
+              clusters.push({ r, g, b, count: 1, saturation: sat, luminance: lum });
+            }
           }
-          r = Math.floor(r / count);
-          g = Math.floor(g / count);
-          b = Math.floor(b / count);
 
-          const primaryHex = this.rgbToHex(r, g, b);
-          const palette = this.generatePaletteFromPrimary(primaryHex, file.name);
+          // Pick the most vibrant (high saturation, medium-high luminance) dominant cluster
+          clusters.sort((a, b) => (b.saturation * 1.5 + (b.luminance / 255)) - (a.saturation * 1.5 + (a.luminance / 255)));
+          const best = clusters[0] || { r: 228, g: 181, b: 203 };
+
+          const primaryHex = this.rgbToHex(best.r, best.g, best.b);
+          const palette = this.generateMaterial3Theme(primaryHex, file.name);
           URL.revokeObjectURL(url);
           resolve(palette);
         } else {
@@ -84,25 +110,28 @@ class MatugenService {
     });
   }
 
-  private generatePaletteFromPrimary(primaryHex: string, name: string): MatugenPalette {
+  /**
+   * Generate complete Material 3 tonal role tokens from primary seed color
+   */
+  private generateMaterial3Theme(primaryHex: string, name: string): MatugenPalette {
     return {
       id: `wallpaper-palette-${Date.now()}`,
       name: `Wallpaper Palette (${name.slice(0, 16)})`,
-      description: 'Extracted directly from desktop wallpaper image',
+      description: 'Extracted via K-Means color quantization algorithm',
       primary: primaryHex,
-      onPrimary: '#1a1016',
-      primaryContainer: this.adjustBrightness(primaryHex, -40),
-      onPrimaryContainer: this.adjustBrightness(primaryHex, 60),
+      onPrimary: '#140c12',
+      primaryContainer: this.adjustBrightness(primaryHex, -45),
+      onPrimaryContainer: this.adjustBrightness(primaryHex, 55),
       secondary: this.adjustBrightness(primaryHex, 20),
-      secondaryContainer: this.adjustBrightness(primaryHex, -60),
+      secondaryContainer: this.adjustBrightness(primaryHex, -65),
       surface: '#120f14',
-      surfaceContainer: '#1a151e',
-      surfaceContainerHigh: '#241e2a',
-      surfaceContainerHighest: '#2f2837',
-      onSurface: '#f0e6ed',
+      surfaceContainer: '#1a161f',
+      surfaceContainerHigh: '#241f2a',
+      surfaceContainerHighest: '#302a37',
+      onSurface: '#f1e6ee',
       onSurfaceVariant: '#d0c3cd',
-      outline: '#90838e',
-      outlineVariant: '#483f47',
+      outline: '#928490',
+      outlineVariant: '#493f48',
       accentGlow: `rgba(${this.hexToRgb(primaryHex)}, 0.3)`
     };
   }

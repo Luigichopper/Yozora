@@ -31,7 +31,7 @@ export const AniDBBrowseView: React.FC = () => {
           genre: genreFilter
         });
         if (isMounted) {
-          setAnimeList(results);
+          setAnimeList(results.items);
         }
       } catch (e) {
         console.error('Failed to search anime:', e);

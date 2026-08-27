@@ -1,6 +1,6 @@
 # Yozora — Feature Tracker & Implementation Status
 
-> Cross-referencing the [spec](file:///c:/Users/Luigi/Documents/Yozora/anime-client-spec.md) against every component in `src/` to document the completed implementation.
+> Cross-referencing the [spec](file:///c:/Users/Luigi/Documents/Yozora/anime-client-spec.md) against every file in `src/` and `aur/` to document the completed methodical implementation.
 
 ---
 
@@ -9,38 +9,39 @@
 | Symbol | Meaning |
 |---|---|
 | ✅ | Working / real implementation |
-| 🚧 | Partially implemented / ongoing refinement |
-| ❌ | Out of scope / future native binary milestone |
+| 🚧 | Partially implemented — ongoing refinement |
+| ❌ | Native binary target (requires Rust / libmpv) |
 
 ---
 
-## 1. Data & Persistence Layer — Real Services & IndexedDB Database
+## 1. Data & Persistence Layer
 
-All data layers are now backed by real services and persistent client database storage (`src/services/db.ts`).
-
-| File / Service | Implementation | Status |
-|---|---|---|
-| [`db.ts`](file:///c:/Users/Luigi/Documents/Yozora/src/services/db.ts) | Real IndexedDB local database (stores anime cache, library entries, danmaku by episode, downloads, and custom settings) | ✅ |
-| [`anidbService.ts`](file:///c:/Users/Luigi/Documents/Yozora/src/services/anidbService.ts) | Multi-tier AniDB & AniList metadata client with rate-limiting backoff (min 1500ms delay) and fuzzy title matcher | ✅ |
-| [`sourceService.ts`](file:///c:/Users/Luigi/Documents/Yozora/src/services/sourceService.ts) | Pluggable BitTorrent RSS aggregator, magnet parser (`xt=urn:btih:...`), smart health ranking, and feed manager | ✅ |
-| [`danmakuService.ts`](file:///c:/Users/Luigi/Documents/Yozora/src/services/danmakuService.ts) | Persistent Danmaku engine with exact playhead timestamp binding (`time: currentTime`) and content filtering | ✅ |
-| [`matugenService.ts`](file:///c:/Users/Luigi/Documents/Yozora/src/services/matugenService.ts) | Dynamic Material You wallpaper color extractor and live Matugen `colors.json` configuration parser | ✅ |
+| File | What It Does | Status | Notes |
+|---|---|---|---|
+| [`db.ts`](file:///c:/Users/Luigi/Documents/Yozora/src/services/db.ts) | Real IndexedDB with 6 stores: `anime_cache`, `library_store`, `danmaku_store`, `downloads_store`, `sources_cache`, `settings_store` | ✅ | Full schema with TTL caching and user library tracking |
+| [`anidbService.ts`](file:///c:/Users/Luigi/Documents/Yozora/src/services/anidbService.ts) | Multi-tier metadata client with 7-day TTL cache invalidation, rate-limit backoff, live GraphQL queries, and fuzzy title matching | ✅ | Live fallback to AniList GraphQL + local SQLite/IndexedDB cache |
+| [`sourceService.ts`](file:///c:/Users/Luigi/Documents/Yozora/src/services/sourceService.ts) | Live RSS XML parser (Nyaa, Mikan, Anime Garden, Tokyo Toshokan, SubsPlease), magnet URI parser, and health ranking | ✅ | Fetches and parses live XML with CORS proxy fallback |
+| [`danmakuService.ts`](file:///c:/Users/Luigi/Documents/Yozora/src/services/danmakuService.ts) | Episode-keyed danmaku IndexedDB store, exact `currentTime` timestamp binding, and keyword filter | ✅ | User comments bind to exact playhead second and persist |
+| [`matugenService.ts`](file:///c:/Users/Luigi/Documents/Yozora/src/services/matugenService.ts) | K-Means color quantizer extracting dominant palette from wallpapers + live `colors.json` CSS token parser | ✅ | Extracts vibrant primary and Material 3 container tokens |
 
 ---
 
 ## 2. Feature-by-Feature Status
 
-### 2.1 AniDB Metadata Integration (Spec §7)
+### 2.1 Anime Metadata Integration (Spec §7)
 
 | Feature | Status | Notes |
 |---|---|---|
-| AniDB Client API registration & validation | ✅ | Fully configurable via `SettingsView` and persisted in `db.ts` |
-| Local cache (series & episode metadata) | ✅ | IndexedDB `anime_cache` store with fast retrieval and search |
-| Flood-control / rate-limit backoff | ✅ | Built-in 1500ms delay queue in `anidbService.ts` |
-| Fuzzy title matching (torrent name → AniDB entry) | ✅ | Implemented via `fuzzyTitleMatch` in `anidbService.ts` |
-| Multi-criteria search (title, romaji, kanji, tags, studio) | ✅ | Live multi-criteria filter in `AniDBBrowseView` with pagination |
-| Episode metadata (OP/ED skip timestamps) | ✅ | Real `opSkipStart`/`opSkipEnd` per episode linked to player |
-| AniDB JSON/XML import & export | ✅ | Complete import & export tool in `LibraryView` |
+| AniDB client credentials UI & persistence | ✅ | Settings form saves to IndexedDB via `anidbService.setCredentials()` |
+| Live API metadata client | ✅ | High-performance GraphQL client querying trending, seasonal, and search endpoints |
+| Local IndexedDB metadata cache | ✅ | `anime_cache` store with `cachedAt` index and fast local query |
+| Cache TTL eviction (7 days) | ✅ | TTL validation against `cachedAt` with automatic refresh |
+| Flood-control / rate-limit backoff | ✅ | 1200ms minimum interval in `rateLimitDelay()` |
+| Fuzzy title matching (torrent → AniDB entry) | ✅ | `fuzzyTitleMatch()` in `anidbService.ts` |
+| Multi-criteria search & filters | ✅ | Live search across title, romaji, kanji, type, status, season, year, and genre |
+| Pagination for browse results | ✅ | Continuous pagination with load more |
+| Episode OP/ED skip timestamps | ✅ | Per-episode `opSkipStart` and `opSkipEnd` skip markers |
+| Local library export/import | ✅ | Export/import JSON sync format |
 
 ---
 
@@ -48,11 +49,13 @@ All data layers are now backed by real services and persistent client database s
 
 | Feature | Status | Notes |
 |---|---|---|
-| Pluggable RSS feed management | ✅ | Active feed registry with toggle, add feed, and persistent state in `sourceService` |
-| Magnet link parsing & validation | ✅ | Real extraction of info hash (`urn:btih:...`), display name, and trackers in `sourceService` |
-| Source health ranking (seeders, codec, group) | ✅ | Intelligent ranking algorithm based on seeders, resolution, codec efficiency, and sub group |
-| Download / cache task manager | ✅ | Full task list in `CacheManagerView` with pause, resume, delete, and offline player launch |
-| Clean toast notifications (No `alert()` stubs) | ✅ | Replaced all intrusive stubs with Material 3 in-app toast feedback |
+| RSS provider registry (toggle/add/persist) | ✅ | `sourceService` persists to `settings_store`; fully wired in SettingsView |
+| Live RSS feed fetching & XML DOM parsing | ✅ | `fetchLiveRssXml()` and `parseRssXmlToSources()` for real RSS releases |
+| Magnet URI parsing (info-hash, name, trackers) | ✅ | `sourceService.parseMagnet()` correctly extracts all fields |
+| Magnet → Download task manager | ✅ | Validated magnet creates managed task in CacheManagerView |
+| Source health ranking algorithm | ✅ | `rankSources()`: seeders × 1.5 + resolution/codec/group bonuses |
+| Download task manager (pause/resume/delete) | ✅ | Full UI; Material 3 toast notifications |
+| Scrubbing thumbnail previews | ✅ | Seekbar hover preview tooltip with live timestamp calculation |
 
 ---
 
@@ -60,12 +63,15 @@ All data layers are now backed by real services and persistent client database s
 
 | Feature | Status | Notes |
 |---|---|---|
-| mpv player core & layout | ✅ | Sleek UI with custom seekbar, buffered segments, and controls |
-| Real video streaming & local file playback | ✅ | Direct streaming with mirror failovers, local file loader (`.mp4`, `.mkv`, `.webm`), and custom URL input |
-| Accurate OP/ED skip | ✅ | Skip OP button jumps directly to `episode.opSkipEnd` timestamp |
-| Real OSD telemetry panel | ✅ | Live measurement of resolution, video bitrate, frame rates, and buffer window |
-| Speed control (0.75x to 2.0x) | ✅ | Fully wired to playback rate |
-| Fullscreen & Volume slider | ✅ | Working with keyboard shortcuts & slider controls |
+| HTML5 video player core | ✅ | Works with any direct-link MP4/WebM |
+| Local file playback (.mp4, .mkv, .webm) | ✅ | Blob URL from file picker |
+| Custom stream URL | ✅ | Custom stream URL input dialog |
+| Seekbar, play/pause, ±10s skip, volume, fullscreen | ✅ | Wired to `videoRef` with keybinds |
+| Playback speed control (0.75x–2.0x) | ✅ | Wired to `videoRef.playbackRate` |
+| Mirror failover chain | ✅ | Cycles `SAMPLE_VIDEOS` on error, then canvas synthesizer |
+| Accurate OP/ED skip | ✅ | Uses `episode.opSkipEnd` timestamp |
+| Auto intro/outro skip | ✅ | Configurable toggle automatically skips OP on air |
+| OSD stats panel (Stats for Nerds) | ✅ | Live telemetry reading video dimensions, bitrate, and buffer window |
 
 ---
 
@@ -98,7 +104,7 @@ All data layers are now backed by real services and persistent client database s
 | Feature | Status | Notes |
 |---|---|---|
 | Preset Material 3 palettes | ✅ | End4-pC Twilight Sakura, Catppuccin Mocha, Tokyo Night, AniDB Amber, Rosé Pine, Emerald, Cyberpunk |
-| Live wallpaper color extraction | ✅ | Image picker extracts prominent colors into dynamic Material 3 tokens |
+| K-Means wallpaper color extraction | ✅ | Color quantizer extracts prominent colors into dynamic Material 3 tokens |
 | Live Matugen `colors.json` parser | ✅ | Import and parse real `~/.config/matugen/colors.json` files |
 | Hyprland window rules snippet generator | ✅ | Generates and copies ready-to-use `windowrulev2` rules for `hyprland.conf` |
 

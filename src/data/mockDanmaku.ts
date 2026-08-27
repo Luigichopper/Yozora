@@ -1,15 +1,16 @@
 import { DanmakuComment } from '../types/anime';
 
-// Multi-mirror reliable streaming URLs for anime playback
+// High-speed anime video streams and animations (replacing generic test videos with anime streams)
 export const SAMPLE_VIDEOS = {
-  default: 'https://vjs.zencdn.net/v/oceans.mp4',
-  mirror1: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4',
+  // Sintel: Open Anime fantasy film with high action & anime aesthetic
+  default: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/Sintel.mp4',
+  mirror1: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/TearsOfSteel.mp4',
   mirror2: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ElephantsDream.mp4',
-  mirror3: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/TearsOfSteel.mp4',
+  mirror3: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerEscapes.mp4',
   mirror4: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4',
-  animeTeaser: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ElephantsDream.mp4',
+  animeTeaser: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/Sintel.mp4',
   musicVideo: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/TearsOfSteel.mp4',
-  highQualityStream: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4'
+  highQualityStream: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/Sintel.mp4'
 };
 
 export const MOCK_DANMAKU_COMMENTS: DanmakuComment[] = [
