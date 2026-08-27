@@ -1,0 +1,12 @@
+[Desktop Entry]
+Name=Yozora
+GenericName=Anime Tracking & Playback Client
+Comment=Material 3 Quickshell-inspired anime client with Matugen theming, AniDB metadata, and danmaku
+Exec=yozora %u
+Icon=yozora
+Terminal=false
+Type=Application
+Categories=AudioVideo;Player;TV;
+StartupWMClass=yozora
+MimeType=x-scheme-handler/magnet;x-scheme-handler/anidb;
+Keywords=anime;anidb;player;danmaku;hyprland;wayland;

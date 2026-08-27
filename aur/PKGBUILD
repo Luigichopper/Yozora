@@ -1,0 +1,29 @@
+# Maintainer: Luigi <luigi@archlinux.org>
+pkgname=yozora-bin
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Native Arch/Hyprland anime tracking, browsing, and playback client with Matugen theming and danmaku"
+arch=('x86_64' 'aarch64')
+url="https://github.com/pctrade/yozora"
+license=('GPL-3.0-or-later')
+depends=(
+  'mpv'
+  'gtk4'
+  'libadwaita'
+  'webkit2gtk-4.1'
+  'xdg-desktop-portal-hyprland'
+)
+optdepends=(
+  'matugen: dynamic Material You color palette generation'
+  'transmission-cli: optional external BitTorrent daemon backend'
+)
+provides=('yozora')
+conflicts=('yozora')
+source=("yozora.desktop")
+sha256sums=('SKIP')
+
+package() {
+  install -Dm755 "yozora" "$pkgdir/usr/bin/yozora"
+  install -Dm644 "yozora.desktop" "$pkgdir/usr/share/applications/yozora.desktop"
+  install -Dm644 "icon.png" "$pkgdir/usr/share/icons/hicolor/512x512/apps/yozora.png"
+}
