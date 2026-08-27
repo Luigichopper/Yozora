@@ -20,7 +20,9 @@ jobs:
           cache: 'npm'
 
       - name: Install dependencies
-        run: npm install
+        run: |
+          npm install
+          chmod -R +x node_modules/.bin 2>/dev/null || true
 
       - name: Run TypeScript & Vite build
         run: npm run build

@@ -30,7 +30,8 @@ jobs:
 
       - name: Build Web Frontend & Tauri Binary
         run: |
-          su builder -c "npm install && npm run build"
+          su builder -c "npm install && chmod -R +x node_modules/.bin 2>/dev/null || true"
+          su builder -c "npm run build"
           su builder -c "cd src-tauri && cargo build --release --locked"
 
       - name: Package Arch Linux .pkg.tar.zst
@@ -78,6 +79,7 @@ jobs:
       - name: Install dependencies & build frontend
         run: |
           npm install
+          chmod -R +x node_modules/.bin 2>/dev/null || true
           npm run build
 
       - name: Build Tauri Bundles (AppImage & DEB)
