@@ -10,8 +10,11 @@ import {
   WatchStatus
 } from '../types/anime';
 import { MATUGEN_PALETTES, applyMatugenTheme } from '../theme/matugen';
-import { MOCK_ANIME_DATABASE } from '../data/mockAniDB';
-import { MOCK_DANMAKU_COMMENTS, SAMPLE_VIDEOS } from '../data/mockDanmaku';
+import { db } from '../services/db';
+import { anidbService } from '../services/anidbService';
+import { sourceService } from '../services/sourceService';
+import { danmakuService } from '../services/danmakuService';
+import { SAMPLE_VIDEOS } from '../data/mockDanmaku';
 
 export type ActiveView = 'discover' | 'browse' | 'library' | 'cache' | 'settings';
 
@@ -21,6 +24,12 @@ interface ActivePlayerState {
   episode: Episode;
   videoUrl: string;
   sourceTitle?: string;
+}
+
+export interface ToastMessage {
+  id: string;
+  text: string;
+  type: 'info' | 'success' | 'warning' | 'error';
 }
 
 interface AppContextType {
@@ -44,7 +53,7 @@ interface AppContextType {
   danmakuSpeedMultiplier: number;
   setDanmakuSpeedMultiplier: (mult: number) => void;
   danmakuComments: DanmakuComment[];
-  addDanmakuComment: (text: string, color?: string, mode?: 'scroll' | 'top' | 'bottom') => void;
+  addDanmakuComment: (text: string, color?: string, mode?: 'scroll' | 'top' | 'bottom', exactTime?: number) => Promise<void>;
 
   // Theming
   activePalette: MatugenPalette;
@@ -54,124 +63,28 @@ interface AppContextType {
 
   // Library & Tracking
   library: Record<string, LibraryEntry>;
-  setAnimeStatus: (animeId: string, status: WatchStatus) => void;
-  setAnimeProgress: (animeId: string, episodeNum: number) => void;
+  setAnimeStatus: (animeId: string, status: WatchStatus) => Promise<void>;
+  setAnimeProgress: (animeId: string, episodeNum: number) => Promise<void>;
+  setAnimeScore: (animeId: string, score: number) => Promise<void>;
   getLibraryEntry: (animeId: string) => LibraryEntry | undefined;
 
   // Downloads & BitTorrent Cache
   downloadTasks: DownloadTask[];
-  addDownloadTask: (anime: AnimeItem, episode: Episode, source: TorrentSource) => void;
-  toggleDownloadPause: (id: string) => void;
-  deleteDownloadTask: (id: string) => void;
+  addDownloadTask: (anime: AnimeItem, episode: Episode, source: TorrentSource) => Promise<void>;
+  addCustomMagnetTask: (magnetUri: string) => Promise<boolean>;
+  toggleDownloadPause: (id: string) => Promise<void>;
+  deleteDownloadTask: (id: string) => Promise<void>;
 
   // Quick Search
   searchQuery: string;
   setSearchQuery: (q: string) => void;
+
+  // Toast Notification System (replaces alerts)
+  toasts: ToastMessage[];
+  showToast: (text: string, type?: 'info' | 'success' | 'warning' | 'error') => void;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
-
-const INITIAL_LIBRARY: Record<string, LibraryEntry> = {
-  'a18012': { // Girls Band Cry
-    animeId: 'a18012',
-    watchStatus: 'Watching',
-    currentEpisode: 4,
-    totalEpisodes: 13,
-    score: 9.5,
-    lastWatchedAt: '2026-08-26T20:15:00Z',
-    updatedAt: '2026-08-26T20:15:00Z'
-  },
-  'a17531': { // Apothecary Diaries S2
-    animeId: 'a17531',
-    watchStatus: 'Watching',
-    currentEpisode: 13,
-    totalEpisodes: 24,
-    score: 9.0,
-    lastWatchedAt: '2026-08-25T21:40:00Z',
-    updatedAt: '2026-08-25T21:40:00Z'
-  },
-  'a17950': { // Wind Breaker S2
-    animeId: 'a17950',
-    watchStatus: 'Watching',
-    currentEpisode: 2,
-    totalEpisodes: 12,
-    score: 8.5,
-    lastWatchedAt: '2026-08-24T18:30:00Z',
-    updatedAt: '2026-08-24T18:30:00Z'
-  },
-  'a07735': { // Gosick
-    animeId: 'a07735',
-    watchStatus: 'Watching',
-    currentEpisode: 18,
-    totalEpisodes: 24,
-    score: 8.8,
-    lastWatchedAt: '2026-08-20T22:10:00Z',
-    updatedAt: '2026-08-20T22:10:00Z'
-  }
-};
-
-const INITIAL_DOWNLOADS: DownloadTask[] = [
-  {
-    id: 'dl-gbc-01',
-    animeId: 'a18012',
-    animeTitle: 'Girls Band Cry',
-    episodeNum: 1,
-    sourceTitle: '[SubsPlease] Girls Band Cry - 01 (1080p) [HEVC 10-bit FLAC]',
-    group: 'SubsPlease',
-    resolution: '1080p HEVC',
-    fileSize: '1.42 GB',
-    totalBytes: 1420000000,
-    downloadedBytes: 1420000000,
-    downloadSpeed: 0,
-    uploadSpeed: 145,
-    progress: 100,
-    status: 'seeding',
-    peers: 48,
-    etaSeconds: 0,
-    addedAt: '2026-08-26 19:30',
-    videoUrl: SAMPLE_VIDEOS.default
-  },
-  {
-    id: 'dl-gbc-02',
-    animeId: 'a18012',
-    animeTitle: 'Girls Band Cry',
-    episodeNum: 2,
-    sourceTitle: '[SubsPlease] Girls Band Cry - 02 (1080p) [HEVC 10-bit FLAC]',
-    group: 'SubsPlease',
-    resolution: '1080p HEVC',
-    fileSize: '1.38 GB',
-    totalBytes: 1380000000,
-    downloadedBytes: 980000000,
-    downloadSpeed: 14250, // 14.2 MB/s
-    uploadSpeed: 820,
-    progress: 71,
-    status: 'downloading',
-    peers: 64,
-    etaSeconds: 28,
-    addedAt: '2026-08-26 21:10',
-    videoUrl: SAMPLE_VIDEOS.animeTeaser
-  },
-  {
-    id: 'dl-kusu-01',
-    animeId: 'a17531',
-    animeTitle: 'The Apothecary Diaries Season 2',
-    episodeNum: 1,
-    sourceTitle: '[SweetSub] Kusuriya no Hitorigoto S2 [01] [1080p HEVC FLAC]',
-    group: 'SweetSub',
-    resolution: '1080p HEVC',
-    fileSize: '1.20 GB',
-    totalBytes: 1200000000,
-    downloadedBytes: 1200000000,
-    downloadSpeed: 0,
-    uploadSpeed: 95,
-    progress: 100,
-    status: 'completed',
-    peers: 32,
-    etaSeconds: 0,
-    addedAt: '2026-08-25 14:20',
-    videoUrl: SAMPLE_VIDEOS.musicVideo
-  }
-];
 
 export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const [currentView, setCurrentView] = useState<ActiveView>('discover');
@@ -181,14 +94,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [searchQuery, setSearchQuery] = useState<string>('');
   
   // Theme state
-  const [activePalette, setActivePaletteState] = useState<MatugenPalette>(() => {
-    const saved = localStorage.getItem('yozora_palette');
-    if (saved) {
-      const found = MATUGEN_PALETTES.find(p => p.id === saved);
-      if (found) return found;
-    }
-    return MATUGEN_PALETTES[0]; // Twilight Sakura default
-  });
+  const [activePalette, setActivePaletteState] = useState<MatugenPalette>(MATUGEN_PALETTES[0]);
   const [blurEnabled, setBlurEnabled] = useState<boolean>(true);
 
   // Danmaku state
@@ -196,87 +102,65 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [danmakuOpacity, setDanmakuOpacity] = useState<number>(0.85);
   const [danmakuFontSize, setDanmakuFontSize] = useState<number>(24);
   const [danmakuSpeedMultiplier, setDanmakuSpeedMultiplier] = useState<number>(1.0);
-  const [danmakuComments, setDanmakuComments] = useState<DanmakuComment[]>(MOCK_DANMAKU_COMMENTS);
+  const [danmakuComments, setDanmakuComments] = useState<DanmakuComment[]>([]);
 
-  // Library & Cache state
-  const [library, setLibrary] = useState<Record<string, LibraryEntry>>(() => {
-    const saved = localStorage.getItem('yozora_library');
-    return saved ? JSON.parse(saved) : INITIAL_LIBRARY;
-  });
+  // Library & Cache state backed by IndexedDB
+  const [library, setLibrary] = useState<Record<string, LibraryEntry>>({});
+  const [downloadTasks, setDownloadTasks] = useState<DownloadTask[]>([]);
+  const [toasts, setToasts] = useState<ToastMessage[]>([]);
 
-  const [downloadTasks, setDownloadTasks] = useState<DownloadTask[]>(() => {
-    const saved = localStorage.getItem('yozora_downloads');
-    return saved ? JSON.parse(saved) : INITIAL_DOWNLOADS;
-  });
-
-  // Apply active palette on load/change
+  // Initial load from IndexedDB
   useEffect(() => {
-    applyMatugenTheme(activePalette);
-    localStorage.setItem('yozora_palette', activePalette.id);
-  }, [activePalette]);
+    async function initFromDb() {
+      // 1. Theme
+      const savedPaletteId = await db.getSetting<string>('yozora_palette_id', 'twilight-sakura');
+      const found = MATUGEN_PALETTES.find(p => p.id === savedPaletteId) || MATUGEN_PALETTES[0];
+      setActivePaletteState(found);
+      applyMatugenTheme(found);
 
-  // Persist library
-  useEffect(() => {
-    localStorage.setItem('yozora_library', JSON.stringify(library));
-  }, [library]);
+      // 2. Library
+      const dbLib = await db.getLibrary();
+      setLibrary(dbLib);
 
-  // Persist downloads
-  useEffect(() => {
-    localStorage.setItem('yozora_downloads', JSON.stringify(downloadTasks));
-  }, [downloadTasks]);
-
-  // Dynamic simulation for downloading tasks
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setDownloadTasks(prevTasks =>
-        prevTasks.map(task => {
-          if (task.status === 'downloading') {
-            const addedBytes = Math.floor(task.downloadSpeed * 1024 * (0.8 + Math.random() * 0.4));
-            const newDownloaded = Math.min(task.totalBytes, task.downloadedBytes + addedBytes);
-            const newProgress = Math.floor((newDownloaded / task.totalBytes) * 100);
-            const isFinished = newDownloaded >= task.totalBytes;
-            const remainingBytes = task.totalBytes - newDownloaded;
-            const newEta = isFinished ? 0 : Math.max(1, Math.round(remainingBytes / (task.downloadSpeed * 1024)));
-
-            return {
-              ...task,
-              downloadedBytes: newDownloaded,
-              progress: newProgress,
-              etaSeconds: newEta,
-              status: isFinished ? 'seeding' : 'downloading',
-              downloadSpeed: isFinished ? 0 : Math.round(12000 + Math.random() * 6000),
-              uploadSpeed: Math.round(300 + Math.random() * 500)
-            };
-          } else if (task.status === 'seeding') {
-            return {
-              ...task,
-              uploadSpeed: Math.round(120 + Math.random() * 180)
-            };
-          }
-          return task;
-        })
-      );
-    }, 1500);
-
-    return () => clearInterval(interval);
+      // 3. Downloads
+      const dbDownloads = await db.getDownloads();
+      setDownloadTasks(dbDownloads);
+    }
+    initFromDb();
   }, []);
 
-  const setActivePalette = (palette: MatugenPalette) => {
-    setActivePaletteState(palette);
+  const showToast = (text: string, type: 'info' | 'success' | 'warning' | 'error' = 'info') => {
+    const id = `toast_${Date.now()}_${Math.random().toString(36).substring(2, 5)}`;
+    setToasts(prev => [...prev, { id, text, type }]);
+    setTimeout(() => {
+      setToasts(prev => prev.filter(t => t.id !== id));
+    }, 3500);
   };
 
-  const openPlayer = (anime: AnimeItem, episode?: Episode, videoUrl?: string, sourceTitle?: string) => {
-    const ep = episode || (anime.episodes.length > 0 ? anime.episodes[0] : {
+  const setActivePalette = async (palette: MatugenPalette) => {
+    setActivePaletteState(palette);
+    applyMatugenTheme(palette);
+    await db.saveSetting('yozora_palette_id', palette.id);
+  };
+
+  // Open Player with episode & load its specific danmaku from DB
+  const openPlayer = async (anime: AnimeItem, episode?: Episode, videoUrl?: string, sourceTitle?: string) => {
+    const ep = episode || (anime.episodes && anime.episodes.length > 0 ? anime.episodes[0] : {
       id: 1,
       epNumber: 1,
       title: 'Episode 01',
       airDate: '2026-01-01',
-      durationMinutes: 24
+      durationMinutes: 24,
+      opSkipStart: 90,
+      opSkipEnd: 180
     });
     
-    // Default video sample
     const chosenVideo = videoUrl || SAMPLE_VIDEOS.default;
     
+    // Load danmaku comments for this exact episode from danmakuService
+    const comments = await danmakuService.getDanmaku(anime.id, ep.epNumber);
+    setDanmakuComments(comments);
+
     setPlayerState({
       isOpen: true,
       anime,
@@ -286,83 +170,102 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     });
 
     // Update library watching progress
-    setAnimeProgress(anime.id, ep.epNumber);
+    await setAnimeProgress(anime.id, ep.epNumber);
   };
 
   const closePlayer = () => {
     setPlayerState(null);
   };
 
-  const addDanmakuComment = (text: string, color = '#ffffff', mode: 'scroll' | 'top' | 'bottom' = 'scroll') => {
-    const newComment: DanmakuComment = {
-      id: `user-dm-${Date.now()}`,
-      time: 0, // In player it will bind to current playhead
+  const addDanmakuComment = async (
+    text: string,
+    color = '#ffffff',
+    mode: 'scroll' | 'top' | 'bottom' = 'scroll',
+    exactTime = 0
+  ) => {
+    if (!playerState) return;
+    const newComment = await danmakuService.sendDanmaku(
+      playerState.anime.id,
+      playerState.episode.epNumber,
       text,
       color,
       mode,
-      size: 'normal',
-      user: 'You'
+      exactTime
+    );
+    if (newComment) {
+      setDanmakuComments(prev => [...prev, newComment]);
+    }
+  };
+
+  const setAnimeStatus = async (animeId: string, status: WatchStatus) => {
+    const anime = await anidbService.getAnimeById(animeId);
+    const existing = library[animeId] || {
+      animeId,
+      watchStatus: status,
+      currentEpisode: 1,
+      totalEpisodes: anime ? anime.episodesCount : 12,
+      score: 8.0,
+      lastWatchedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
     };
-    setDanmakuComments(prev => [...prev, newComment]);
+
+    const updatedEntry: LibraryEntry = {
+      ...existing,
+      watchStatus: status,
+      updatedAt: new Date().toISOString()
+    };
+
+    await db.saveLibraryEntry(updatedEntry);
+    setLibrary(prev => ({ ...prev, [animeId]: updatedEntry }));
+    showToast(`Updated status for "${anime?.title || animeId}" to ${status}`, 'success');
   };
 
-  const setAnimeStatus = (animeId: string, status: WatchStatus) => {
-    const anime = MOCK_ANIME_DATABASE.find(a => a.id === animeId);
-    setLibrary(prev => {
-      const existing = prev[animeId] || {
-        animeId,
-        watchStatus: status,
-        currentEpisode: 1,
-        totalEpisodes: anime ? anime.episodesCount : 12,
-        score: 8.0,
-        lastWatchedAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
-      };
+  const setAnimeProgress = async (animeId: string, episodeNum: number) => {
+    const anime = await anidbService.getAnimeById(animeId);
+    const existing = library[animeId] || {
+      animeId,
+      watchStatus: 'Watching',
+      currentEpisode: episodeNum,
+      totalEpisodes: anime ? anime.episodesCount : 12,
+      score: 8.0,
+      lastWatchedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
 
-      return {
-        ...prev,
-        [animeId]: {
-          ...existing,
-          watchStatus: status,
-          updatedAt: new Date().toISOString()
-        }
-      };
-    });
+    const isCompleted = anime && episodeNum >= anime.episodesCount;
+
+    const updatedEntry: LibraryEntry = {
+      ...existing,
+      watchStatus: isCompleted ? 'Completed' : 'Watching',
+      currentEpisode: episodeNum,
+      lastWatchedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+
+    await db.saveLibraryEntry(updatedEntry);
+    setLibrary(prev => ({ ...prev, [animeId]: updatedEntry }));
   };
 
-  const setAnimeProgress = (animeId: string, episodeNum: number) => {
-    const anime = MOCK_ANIME_DATABASE.find(a => a.id === animeId);
-    setLibrary(prev => {
-      const existing = prev[animeId] || {
-        animeId,
-        watchStatus: 'Watching',
-        currentEpisode: episodeNum,
-        totalEpisodes: anime ? anime.episodesCount : 12,
-        score: 8.0,
-        lastWatchedAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
-      };
+  const setAnimeScore = async (animeId: string, score: number) => {
+    const existing = library[animeId];
+    if (!existing) return;
 
-      const isCompleted = anime && episodeNum >= anime.episodesCount;
+    const updatedEntry: LibraryEntry = {
+      ...existing,
+      score: Math.max(0, Math.min(10, score)),
+      updatedAt: new Date().toISOString()
+    };
 
-      return {
-        ...prev,
-        [animeId]: {
-          ...existing,
-          watchStatus: isCompleted ? 'Completed' : 'Watching',
-          currentEpisode: episodeNum,
-          lastWatchedAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString()
-        }
-      };
-    });
+    await db.saveLibraryEntry(updatedEntry);
+    setLibrary(prev => ({ ...prev, [animeId]: updatedEntry }));
+    showToast(`Saved personal rating (${score.toFixed(1)}/10)`, 'success');
   };
 
   const getLibraryEntry = (animeId: string) => {
     return library[animeId];
   };
 
-  const addDownloadTask = (anime: AnimeItem, episode: Episode, source: TorrentSource) => {
+  const addDownloadTask = async (anime: AnimeItem, episode: Episode, source: TorrentSource) => {
     const newTask: DownloadTask = {
       id: `dl-${Date.now()}`,
       animeId: anime.id,
@@ -373,38 +276,79 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       resolution: source.resolution,
       fileSize: source.fileSize,
       totalBytes: 1350000000,
-      downloadedBytes: 50000000,
-      downloadSpeed: 11500,
-      uploadSpeed: 210,
-      progress: 4,
-      status: 'downloading',
+      downloadedBytes: 1350000000, // Complete for instant playback
+      downloadSpeed: 0,
+      uploadSpeed: 180,
+      progress: 100,
+      status: 'completed',
       peers: source.seeders,
-      etaSeconds: 110,
+      etaSeconds: 0,
       addedAt: new Date().toLocaleDateString() + ' ' + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      videoUrl: SAMPLE_VIDEOS.highQualityStream
+      videoUrl: SAMPLE_VIDEOS.default
     };
 
+    await db.saveDownloadTask(newTask);
     setDownloadTasks(prev => [newTask, ...prev]);
+    showToast(`Added "${source.title}" to Cache Manager!`, 'success');
   };
 
-  const toggleDownloadPause = (id: string) => {
-    setDownloadTasks(prev =>
-      prev.map(task => {
+  const addCustomMagnetTask = async (magnetUri: string): Promise<boolean> => {
+    const parsed = sourceService.parseMagnet(magnetUri);
+    if (!parsed) {
+      showToast('Invalid magnet URI format. Must start with magnet:?xt=urn:btih:...', 'error');
+      return false;
+    }
+
+    const newTask: DownloadTask = {
+      id: `dl-magnet-${Date.now()}`,
+      animeId: 'custom',
+      animeTitle: parsed.name,
+      episodeNum: 1,
+      sourceTitle: parsed.name,
+      group: 'P2P Swarm',
+      resolution: '1080p',
+      fileSize: '1.40 GB',
+      totalBytes: 1400000000,
+      downloadedBytes: 1400000000,
+      downloadSpeed: 0,
+      uploadSpeed: 210,
+      progress: 100,
+      status: 'completed',
+      peers: 42,
+      etaSeconds: 0,
+      addedAt: new Date().toLocaleDateString() + ' ' + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      videoUrl: SAMPLE_VIDEOS.default
+    };
+
+    await db.saveDownloadTask(newTask);
+    setDownloadTasks(prev => [newTask, ...prev]);
+    showToast(`Connected to BitTorrent swarm for "${parsed.name}"!`, 'success');
+    return true;
+  };
+
+  const toggleDownloadPause = async (id: string) => {
+    setDownloadTasks(prev => {
+      const updated = prev.map(task => {
         if (task.id === id) {
           const nextStatus = task.status === 'downloading' ? 'paused' : 'downloading';
-          return {
+          const u: DownloadTask = {
             ...task,
             status: nextStatus,
             downloadSpeed: nextStatus === 'paused' ? 0 : 9500
           };
+          db.saveDownloadTask(u);
+          return u;
         }
         return task;
-      })
-    );
+      });
+      return updated;
+    });
   };
 
-  const deleteDownloadTask = (id: string) => {
+  const deleteDownloadTask = async (id: string) => {
+    await db.deleteDownloadTask(id);
     setDownloadTasks(prev => prev.filter(task => task.id !== id));
+    showToast('Removed task from Cache Manager.', 'info');
   };
 
   return (
@@ -436,16 +380,42 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         library,
         setAnimeStatus,
         setAnimeProgress,
+        setAnimeScore,
         getLibraryEntry,
         downloadTasks,
         addDownloadTask,
+        addCustomMagnetTask,
         toggleDownloadPause,
         deleteDownloadTask,
         searchQuery,
-        setSearchQuery
+        setSearchQuery,
+        toasts,
+        showToast
       }}
     >
       {children}
+      {/* Material 3 Toast Container */}
+      <div style={{ position: 'fixed', bottom: '24px', right: '24px', zIndex: 999, display: 'flex', flexDirection: 'column', gap: '8px', pointerEvents: 'none' }}>
+        {toasts.map(toast => (
+          <div
+            key={toast.id}
+            style={{
+              background: 'var(--md-sys-color-surface-container-highest)',
+              color: toast.type === 'error' ? '#ff8585' : toast.type === 'success' ? '#a5f3bc' : 'var(--md-sys-color-on-surface)',
+              border: `1px solid ${toast.type === 'error' ? 'rgba(255,100,100,0.4)' : toast.type === 'success' ? 'rgba(100,255,150,0.4)' : 'var(--md-sys-color-outline-variant)'}`,
+              borderRadius: '12px',
+              padding: '10px 18px',
+              fontSize: '13px',
+              fontWeight: 500,
+              boxShadow: '0 8px 24px rgba(0,0,0,0.5)',
+              pointerEvents: 'auto',
+              animation: 'fadeIn 0.2s ease'
+            }}
+          >
+            {toast.text}
+          </div>
+        ))}
+      </div>
     </AppContext.Provider>
   );
 };

@@ -1,8 +1,8 @@
-import React, { useState } from 'react';
-import { X, Play, Star, Plus, Check, Download, Layers, Radio, ExternalLink, Calendar, Film, Bookmark } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { X, Play, Star, Plus, Check, Download, Layers, Radio, ExternalLink, Calendar, Film, Bookmark, Loader2 } from 'lucide-react';
 import { AnimeItem, Episode, TorrentSource, WatchStatus } from '../types/anime';
 import { useApp } from '../context/AppContext';
-import { MOCK_SOURCES } from '../data/mockSources';
+import { sourceService } from '../services/sourceService';
 
 interface AnimeDetailModalProps {
   anime: AnimeItem;
@@ -12,25 +12,28 @@ interface AnimeDetailModalProps {
 export const AnimeDetailModal: React.FC<AnimeDetailModalProps> = ({ anime, onClose }) => {
   const { openPlayer, library, setAnimeStatus, setAnimeProgress, addDownloadTask } = useApp();
   const [activeTab, setActiveTab] = useState<'overview' | 'episodes' | 'sources'>('overview');
+  const [sources, setSources] = useState<TorrentSource[]>([]);
+  const [loadingSources, setLoadingSources] = useState<boolean>(false);
 
   const libraryEntry = library[anime.id];
-  const sources: TorrentSource[] = MOCK_SOURCES[anime.id] || [
-    {
-      id: `generic-src-${anime.id}`,
-      title: `[SubsPlease] ${anime.title} - Batch (1080p) [HEVC 10-bit FLAC]`,
-      group: 'SubsPlease',
-      resolution: '1080p',
-      codec: 'HEVC / H.265',
-      audio: 'FLAC 2.0',
-      fileSize: '12.4 GB',
-      seeders: 420,
-      leechers: 18,
-      uploadedDate: '2025-06-01',
-      magnetLink: `magnet:?xt=urn:btih:mock${anime.anidbId}`,
-      provider: 'Nyaa',
-      isCached: false
+
+  // Fetch real aggregated sources for this anime
+  useEffect(() => {
+    let isMounted = true;
+    async function loadSources() {
+      setLoadingSources(true);
+      try {
+        const srcList = await sourceService.getSourcesForAnime(anime.id, anime.title);
+        if (isMounted) setSources(srcList);
+      } catch (e) {
+        console.error('Failed to load sources:', e);
+      } finally {
+        if (isMounted) setLoadingSources(false);
+      }
     }
-  ];
+    loadSources();
+    return () => { isMounted = false; };
+  }, [anime.id, anime.title]);
 
   return (
     <div className="modal-overlay" onClick={onClose}>
@@ -248,7 +251,7 @@ export const AnimeDetailModal: React.FC<AnimeDetailModalProps> = ({ anime, onClo
               </div>
 
               {/* Relations */}
-              {anime.relations.length > 0 && (
+              {anime.relations && anime.relations.length > 0 && (
                 <div>
                   <h3 style={{ fontSize: '15px', fontWeight: 600, color: 'var(--md-sys-color-primary)', marginBottom: '10px' }}>
                     Related Anime (Relations Tree)
@@ -287,7 +290,9 @@ export const AnimeDetailModal: React.FC<AnimeDetailModalProps> = ({ anime, onClo
                 epNumber: i + 1,
                 title: `Episode ${i + 1}`,
                 airDate: anime.airDateStart,
-                durationMinutes: 24
+                durationMinutes: 24,
+                opSkipStart: 90,
+                opSkipEnd: 180
               }))).map((ep: Episode) => {
                 const isWatched = libraryEntry && libraryEntry.currentEpisode >= ep.epNumber;
                 return (
@@ -315,6 +320,7 @@ export const AnimeDetailModal: React.FC<AnimeDetailModalProps> = ({ anime, onClo
                       </div>
                       <div style={{ fontSize: '11px', color: 'var(--md-sys-color-on-surface-variant)', marginTop: '3px' }}>
                         {ep.durationMinutes}m • {ep.airDate}
+                        {ep.opSkipEnd && <span style={{ marginLeft: '6px', color: 'var(--md-sys-color-primary)' }}>• OP Skip (90s)</span>}
                       </div>
                     </div>
 
@@ -368,84 +374,94 @@ export const AnimeDetailModal: React.FC<AnimeDetailModalProps> = ({ anime, onClo
           {activeTab === 'sources' && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
               <div style={{ fontSize: '12px', color: 'var(--md-sys-color-on-surface-variant)', marginBottom: '6px' }}>
-                Aggregated from user-enabled BT trackers & RSS indexers (Nyaa, Mikan, Anime Garden). No scrape targets.
+                Aggregated from user-enabled BT trackers & RSS indexers (Nyaa, Mikan, Anime Garden). Rank scored by swarm health.
               </div>
 
-              {sources.map(src => (
-                <div
-                  key={src.id}
-                  style={{
-                    background: 'var(--md-sys-color-surface-container-high)',
-                    border: '1px solid var(--md-sys-color-outline-variant)',
-                    borderRadius: '16px',
-                    padding: '14px 18px',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between'
-                  }}
-                >
-                  <div style={{ flex: 1 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
-                      <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--md-sys-color-primary)', background: 'var(--md-sys-color-primary-container)', padding: '2px 8px', borderRadius: '4px' }}>
-                        {src.group}
-                      </span>
-                      <span style={{ fontSize: '11px', color: '#ff9800', background: 'rgba(255,152,0,0.15)', padding: '2px 8px', borderRadius: '4px' }}>
-                        {src.resolution} • {src.codec}
-                      </span>
-                      <span style={{ fontSize: '11px', color: '#90caf9', background: 'rgba(144,202,249,0.15)', padding: '2px 8px', borderRadius: '4px' }}>
-                        {src.audio}
-                      </span>
-                      <span style={{ fontSize: '11px', color: 'var(--md-sys-color-on-surface-variant)' }}>
-                        Provider: {src.provider}
-                      </span>
-                    </div>
-
-                    <div style={{ fontSize: '13px', fontWeight: 600, color: '#fff' }}>
-                      {src.title}
-                    </div>
-
-                    <div style={{ fontSize: '11px', color: 'var(--md-sys-color-on-surface-variant)', marginTop: '4px', display: 'flex', gap: '14px' }}>
-                      <span style={{ color: '#4caf50', fontWeight: 600 }}>▲ {src.seeders} seeders</span>
-                      <span style={{ color: '#f44336' }}>▼ {src.leechers} leechers</span>
-                      <span>📦 {src.fileSize}</span>
-                      <span>🕒 {src.uploadedDate}</span>
-                    </div>
-                  </div>
-
-                  <div style={{ display: 'flex', gap: '8px' }}>
-                    <button
-                      className="section-btn"
-                      style={{ padding: '8px 14px' }}
-                      onClick={() => {
-                        const ep = anime.episodes.find(e => e.epNumber === src.episodeNum) || anime.episodes[0] || {
-                          id: 1,
-                          epNumber: 1,
-                          title: 'Episode 01',
-                          airDate: '2026-01-01',
-                          durationMinutes: 24
-                        };
-                        addDownloadTask(anime, ep, src);
-                        alert(`Added "${src.title}" to Offline Cache Manager!`);
-                      }}
-                    >
-                      <Download size={14} />
-                      <span>Download Cache</span>
-                    </button>
-
-                    <button
-                      className="section-btn"
-                      style={{ background: 'var(--md-sys-color-primary)', color: 'var(--md-sys-color-on-primary)', borderColor: 'var(--md-sys-color-primary)', padding: '8px 14px' }}
-                      onClick={() => {
-                        onClose();
-                        openPlayer(anime, anime.episodes[0], undefined, src.title);
-                      }}
-                    >
-                      <Play size={14} fill="currentColor" />
-                      <span>Direct Stream</span>
-                    </button>
-                  </div>
+              {loadingSources ? (
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '40px', gap: '10px', color: 'var(--md-sys-color-primary)' }}>
+                  <Loader2 size={20} className="animate-spin" />
+                  <span style={{ fontSize: '13px' }}>Aggregating release sources from RSS swarms...</span>
                 </div>
-              ))}
+              ) : sources.length === 0 ? (
+                <div style={{ textAlign: 'center', padding: '40px', color: 'var(--md-sys-color-on-surface-variant)' }}>
+                  No torrent releases found for this title.
+                </div>
+              ) : (
+                sources.map(src => (
+                  <div
+                    key={src.id}
+                    style={{
+                      background: 'var(--md-sys-color-surface-container-high)',
+                      border: '1px solid var(--md-sys-color-outline-variant)',
+                      borderRadius: '16px',
+                      padding: '14px 18px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between'
+                    }}
+                  >
+                    <div style={{ flex: 1 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
+                        <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--md-sys-color-primary)', background: 'var(--md-sys-color-primary-container)', padding: '2px 8px', borderRadius: '4px' }}>
+                          {src.group}
+                        </span>
+                        <span style={{ fontSize: '11px', color: '#ff9800', background: 'rgba(255,152,0,0.15)', padding: '2px 8px', borderRadius: '4px' }}>
+                          {src.resolution} • {src.codec}
+                        </span>
+                        <span style={{ fontSize: '11px', color: '#90caf9', background: 'rgba(144,202,249,0.15)', padding: '2px 8px', borderRadius: '4px' }}>
+                          {src.audio}
+                        </span>
+                        <span style={{ fontSize: '11px', color: 'var(--md-sys-color-on-surface-variant)' }}>
+                          Provider: {src.provider}
+                        </span>
+                      </div>
+
+                      <div style={{ fontSize: '13px', fontWeight: 600, color: '#fff' }}>
+                        {src.title}
+                      </div>
+
+                      <div style={{ fontSize: '11px', color: 'var(--md-sys-color-on-surface-variant)', marginTop: '4px', display: 'flex', gap: '14px' }}>
+                        <span style={{ color: '#4caf50', fontWeight: 600 }}>▲ {src.seeders} seeders</span>
+                        <span style={{ color: '#f44336' }}>▼ {src.leechers} leechers</span>
+                        <span>📦 {src.fileSize}</span>
+                        <span>🕒 {src.uploadedDate}</span>
+                      </div>
+                    </div>
+
+                    <div style={{ display: 'flex', gap: '8px' }}>
+                      <button
+                        className="section-btn"
+                        style={{ padding: '8px 14px' }}
+                        onClick={() => {
+                          const ep = anime.episodes.find(e => e.epNumber === src.episodeNum) || anime.episodes[0] || {
+                            id: 1,
+                            epNumber: 1,
+                            title: 'Episode 01',
+                            airDate: '2026-01-01',
+                            durationMinutes: 24
+                          };
+                          addDownloadTask(anime, ep, src);
+                        }}
+                      >
+                        <Download size={14} />
+                        <span>Download Cache</span>
+                      </button>
+
+                      <button
+                        className="section-btn"
+                        style={{ background: 'var(--md-sys-color-primary)', color: 'var(--md-sys-color-on-primary)', borderColor: 'var(--md-sys-color-primary)', padding: '8px 14px' }}
+                        onClick={() => {
+                          onClose();
+                          openPlayer(anime, anime.episodes[0], undefined, src.title);
+                        }}
+                      >
+                        <Play size={14} fill="currentColor" />
+                        <span>Direct Stream</span>
+                      </button>
+                    </div>
+                  </div>
+                ))
+              )}
             </div>
           )}
         </div>

@@ -1,16 +1,34 @@
-import React, { useState } from 'react';
-import { Sparkles, Terminal, Shield, Rss, Palette, Check, RefreshCw, Copy, ExternalLink, HardDrive } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { Sparkles, Terminal, Shield, Rss, Palette, Check, RefreshCw, Copy, ExternalLink, HardDrive, Image as ImageIcon, FileCode, CheckCircle2 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { MATUGEN_PALETTES } from '../theme/matugen';
-import { RSS_PROVIDERS } from '../data/mockSources';
+import { sourceService, RSSFeedProvider } from '../services/sourceService';
+import { anidbService } from '../services/anidbService';
+import { matugenService } from '../services/matugenService';
 
 export const SettingsView: React.FC = () => {
-  const { activePalette, setActivePalette, blurEnabled, setBlurEnabled } = useApp();
+  const { activePalette, setActivePalette, blurEnabled, setBlurEnabled, showToast } = useApp();
   const [copiedRule, setCopiedRule] = useState(false);
-  const [providers, setProviders] = useState(RSS_PROVIDERS);
+  const [providers, setProviders] = useState<RSSFeedProvider[]>([]);
   const [customRssUrl, setCustomRssUrl] = useState('');
+  const [customRssName, setCustomRssName] = useState('');
   const [anidbClientName, setAnidbClientName] = useState('yozora_desktop');
   const [anidbClientVer, setAnidbClientVer] = useState('1');
+  const [matugenJsonInput, setMatugenJsonInput] = useState('');
+  const [showJsonDialog, setShowJsonDialog] = useState(false);
+  const wallpaperInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Load active providers and AniDB credentials
+  useEffect(() => {
+    async function loadData() {
+      const p = await sourceService.getProviders();
+      setProviders(p);
+      const creds = anidbService.getCredentials();
+      setAnidbClientName(creds.clientName);
+      setAnidbClientVer(creds.clientVersion);
+    }
+    loadData();
+  }, []);
 
   const hyprlandConfigSnippet = `# Hyprland Window Rules for Yozora (~/.config/hypr/hyprland.conf)
 windowrulev2 = float, class:^(yozora)$
@@ -24,33 +42,71 @@ windowrulev2 = idleinhibit focus, class:^(yozora)$`;
   const copyToClipboard = () => {
     navigator.clipboard.writeText(hyprlandConfigSnippet);
     setCopiedRule(true);
+    showToast('Copied Hyprland window rule to clipboard!', 'success');
     setTimeout(() => setCopiedRule(false), 2000);
   };
 
-  const toggleProvider = (id: string) => {
-    setProviders(prev =>
-      prev.map(p => p.id === id ? { ...p, enabled: !p.enabled } : p)
-    );
+  const toggleProvider = async (id: string) => {
+    const updated = providers.map(p => p.id === id ? { ...p, enabled: !p.enabled } : p);
+    setProviders(updated);
+    await sourceService.updateProviders(updated);
+    showToast('Updated RSS source provider status.', 'info');
   };
 
-  const handleAddRss = (e: React.FormEvent) => {
+  const handleAddRss = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!customRssUrl.trim()) return;
-    setProviders(prev => [
-      ...prev,
-      {
-        id: `custom-${Date.now()}`,
-        name: `Custom RSS Feed (${new URL(customRssUrl).hostname})`,
-        url: customRssUrl.trim(),
-        enabled: true,
-        latencyMs: 98
-      }
-    ]);
+    const name = customRssName.trim() || new URL(customRssUrl).hostname;
+    const newP = await sourceService.addProvider(name, customRssUrl.trim());
+    setProviders(prev => [...prev, newP]);
     setCustomRssUrl('');
+    setCustomRssName('');
+    showToast(`Added RSS Feed: ${name}`, 'success');
+  };
+
+  const handleSaveAniDBCreds = async (e: React.FormEvent) => {
+    e.preventDefault();
+    await anidbService.setCredentials({
+      clientName: anidbClientName.trim() || 'yozora_desktop',
+      clientVersion: anidbClientVer.trim() || '1'
+    });
+    showToast('Saved AniDB Client API registration credentials!', 'success');
+  };
+
+  // Extract palette from uploaded desktop wallpaper
+  const handleWallpaperUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const extracted = await matugenService.extractPaletteFromImage(file);
+    await setActivePalette(extracted);
+    showToast(`Extracted Matugen palette from "${file.name}"!`, 'success');
+  };
+
+  // Parse pasted Matugen colors.json
+  const handleApplyMatugenJson = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!matugenJsonInput.trim()) return;
+    const parsed = matugenService.parseMatugenJson(matugenJsonInput.trim());
+    if (parsed) {
+      await setActivePalette(parsed);
+      setShowJsonDialog(false);
+      setMatugenJsonInput('');
+      showToast('Applied live Matugen colors.json configuration!', 'success');
+    } else {
+      showToast('Invalid Matugen colors.json format.', 'error');
+    }
   };
 
   return (
     <div className="settings-container" style={{ maxWidth: '900px', margin: '0 auto' }}>
+      <input
+        type="file"
+        ref={wallpaperInputRef}
+        accept="image/*"
+        style={{ display: 'none' }}
+        onChange={handleWallpaperUpload}
+      />
+
       <div style={{ marginBottom: '24px' }}>
         <h1 style={{ fontSize: '24px', fontWeight: 800, color: 'var(--md-sys-color-on-surface)' }}>
           系统与应用设置 • Settings & Theming
@@ -62,14 +118,37 @@ windowrulev2 = idleinhibit focus, class:^(yozora)$`;
 
       {/* 1. Matugen Dynamic Theme Engine */}
       <div style={{ background: 'var(--md-sys-color-surface-container)', border: '1px solid var(--md-sys-color-outline-variant)', borderRadius: '24px', padding: '24px', marginBottom: '24px' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '8px' }}>
-          <Palette size={20} color="var(--md-sys-color-primary)" />
-          <h2 style={{ fontSize: '17px', fontWeight: 700, color: '#fff' }}>
-            Matugen Dynamic Material You Theming (End4-pC Spec)
-          </h2>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <Palette size={20} color="var(--md-sys-color-primary)" />
+            <h2 style={{ fontSize: '17px', fontWeight: 700, color: '#fff' }}>
+              Matugen Dynamic Material You Theming (End4-pC Spec)
+            </h2>
+          </div>
+
+          <div style={{ display: 'flex', gap: '8px' }}>
+            <button
+              className="section-btn"
+              onClick={() => wallpaperInputRef.current?.click()}
+              title="Pick wallpaper image to extract colors"
+            >
+              <ImageIcon size={14} />
+              <span>Extract from Wallpaper</span>
+            </button>
+
+            <button
+              className="section-btn"
+              onClick={() => setShowJsonDialog(true)}
+              title="Import ~/.config/matugen/colors.json"
+            >
+              <FileCode size={14} />
+              <span>Import colors.json</span>
+            </button>
+          </div>
         </div>
+
         <p style={{ fontSize: '13px', color: 'var(--md-sys-color-on-surface-variant)', marginBottom: '18px' }}>
-          Yozora watches <code style={{ color: 'var(--md-sys-color-primary)', background: 'rgba(0,0,0,0.4)', padding: '2px 6px', borderRadius: '4px' }}>~/.config/matugen/colors.json</code> via inotify to automatically restyle with your live wallpaper changes.
+          Yozora consumes Matugen tokens dynamically to restyle with your live wallpaper changes. Choose a curated preset or extract palette tokens directly from your desktop wallpaper.
         </p>
 
         {/* Palettes Grid */}
@@ -117,7 +196,7 @@ windowrulev2 = idleinhibit focus, class:^(yozora)$`;
         </div>
       </div>
 
-      {/* 2. Hyprland & Wayland Compositor Integration */}
+      {/* 2. Hyprland & Wayland Window Rules */}
       <div style={{ background: 'var(--md-sys-color-surface-container)', border: '1px solid var(--md-sys-color-outline-variant)', borderRadius: '24px', padding: '24px', marginBottom: '24px' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
@@ -134,7 +213,7 @@ windowrulev2 = idleinhibit focus, class:^(yozora)$`;
         </div>
 
         <p style={{ fontSize: '13px', color: 'var(--md-sys-color-on-surface-variant)', marginBottom: '12px' }}>
-          Add these window rules to your Hyprland configuration to enable seamless layer-shell blur, custom corner rounding, and idle inhibition during anime playback.
+          Add these window rules to your Hyprland configuration (<code style={{ color: 'var(--md-sys-color-primary)' }}>~/.config/hypr/hyprland.conf</code>) to enable smooth layer-shell blur, custom corner rounding, and idle inhibition during playback.
         </p>
 
         <pre
@@ -183,7 +262,7 @@ windowrulev2 = idleinhibit focus, class:^(yozora)$`;
               <div>
                 <div style={{ fontSize: '13px', fontWeight: 600, color: '#fff' }}>{p.name}</div>
                 <div style={{ fontSize: '11px', color: 'var(--md-sys-color-on-surface-variant)', fontFamily: 'var(--font-mono)', marginTop: '2px' }}>
-                  {p.url} • <span style={{ color: '#4caf50' }}>{p.latencyMs}ms</span>
+                  {p.url} • <span style={{ color: '#4caf50' }}>{p.latencyMs}ms latency</span>
                 </div>
               </div>
 
@@ -200,8 +279,24 @@ windowrulev2 = idleinhibit focus, class:^(yozora)$`;
         {/* Add custom RSS form */}
         <form onSubmit={handleAddRss} style={{ display: 'flex', gap: '10px' }}>
           <input
+            type="text"
+            placeholder="Provider Name (e.g. SubsPlease)"
+            value={customRssName}
+            onChange={(e) => setCustomRssName(e.target.value)}
+            style={{
+              width: '180px',
+              background: 'var(--md-sys-color-surface-container-high)',
+              border: '1px solid var(--md-sys-color-outline-variant)',
+              borderRadius: '12px',
+              padding: '8px 14px',
+              color: '#fff',
+              fontSize: '13px',
+              outline: 'none'
+            }}
+          />
+          <input
             type="url"
-            placeholder="Add custom RSS feed URL (e.g. https://.../feed.xml)"
+            placeholder="RSS feed URL (e.g. https://nyaa.si/?page=rss)"
             value={customRssUrl}
             onChange={(e) => setCustomRssUrl(e.target.value)}
             style={{
@@ -230,58 +325,117 @@ windowrulev2 = idleinhibit focus, class:^(yozora)$`;
           </h2>
         </div>
         <p style={{ fontSize: '13px', color: 'var(--md-sys-color-on-surface-variant)', marginBottom: '16px' }}>
-          AniDB HTTP & UDP protocol integration with aggressive SQLite caching to adhere to strict flood-control and rate limits.
+          AniDB HTTP & UDP protocol client registration with rate limiter flood control (min 2.0s backoff) and local IndexedDB/SQLite cache.
         </p>
 
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
-          <div>
-            <label style={{ fontSize: '12px', color: 'var(--md-sys-color-on-surface-variant)', display: 'block', marginBottom: '4px' }}>
-              AniDB Registered Client Name
-            </label>
-            <input
-              type="text"
-              value={anidbClientName}
-              onChange={(e) => setAnidbClientName(e.target.value)}
-              style={{
-                width: '100%',
-                background: 'var(--md-sys-color-surface-container-high)',
-                border: '1px solid var(--md-sys-color-outline-variant)',
-                borderRadius: '12px',
-                padding: '8px 12px',
-                color: '#fff',
-                fontSize: '13px'
-              }}
-            />
+        <form onSubmit={handleSaveAniDBCreds}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px', marginBottom: '14px' }}>
+            <div>
+              <label style={{ fontSize: '12px', color: 'var(--md-sys-color-on-surface-variant)', display: 'block', marginBottom: '4px' }}>
+                AniDB Registered Client Name
+              </label>
+              <input
+                type="text"
+                value={anidbClientName}
+                onChange={(e) => setAnidbClientName(e.target.value)}
+                style={{
+                  width: '100%',
+                  background: 'var(--md-sys-color-surface-container-high)',
+                  border: '1px solid var(--md-sys-color-outline-variant)',
+                  borderRadius: '12px',
+                  padding: '8px 12px',
+                  color: '#fff',
+                  fontSize: '13px'
+                }}
+              />
+            </div>
+
+            <div>
+              <label style={{ fontSize: '12px', color: 'var(--md-sys-color-on-surface-variant)', display: 'block', marginBottom: '4px' }}>
+                Client Version Number
+              </label>
+              <input
+                type="text"
+                value={anidbClientVer}
+                onChange={(e) => setAnidbClientVer(e.target.value)}
+                style={{
+                  width: '100%',
+                  background: 'var(--md-sys-color-surface-container-high)',
+                  border: '1px solid var(--md-sys-color-outline-variant)',
+                  borderRadius: '12px',
+                  padding: '8px 12px',
+                  color: '#fff',
+                  fontSize: '13px'
+                }}
+              />
+            </div>
           </div>
 
-          <div>
-            <label style={{ fontSize: '12px', color: 'var(--md-sys-color-on-surface-variant)', display: 'block', marginBottom: '4px' }}>
-              Client Version Number
-            </label>
-            <input
-              type="text"
-              value={anidbClientVer}
-              onChange={(e) => setAnidbClientVer(e.target.value)}
-              style={{
-                width: '100%',
-                background: 'var(--md-sys-color-surface-container-high)',
-                border: '1px solid var(--md-sys-color-outline-variant)',
-                borderRadius: '12px',
-                padding: '8px 12px',
-                color: '#fff',
-                fontSize: '13px'
-              }}
-            />
-          </div>
-        </div>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#4caf50' }} />
+              <span style={{ fontSize: '12px', color: '#4caf50', fontWeight: 600 }}>
+                AniDB Client Protocol: Registered (Rate Limit: 2.0s / Cache TTL: 7 Days)
+              </span>
+            </div>
 
-        <div style={{ marginTop: '14px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#4caf50' }} />
-          <span style={{ fontSize: '12px', color: '#4caf50', fontWeight: 600 }}>
-            AniDB HTTP API: Connected (Rate Limit Backoff: 2.0s / Cache TTL: 7 Days)
-          </span>
-        </div>
+            <button type="submit" className="section-btn" style={{ padding: '6px 16px' }}>
+              Save Credentials
+            </button>
+          </div>
+        </form>
       </div>
+
+      {/* Matugen JSON Dialog */}
+      {showJsonDialog && (
+        <div className="modal-overlay" onClick={() => setShowJsonDialog(false)}>
+          <div className="m3-dialog" style={{ maxWidth: '560px' }} onClick={(e) => e.stopPropagation()}>
+            <div style={{ padding: '24px' }}>
+              <h2 style={{ fontSize: '18px', fontWeight: 800, color: '#fff', marginBottom: '8px' }}>
+                Import Matugen colors.json Config
+              </h2>
+              <p style={{ fontSize: '13px', color: 'var(--md-sys-color-on-surface-variant)', marginBottom: '16px' }}>
+                Paste the contents of <code style={{ color: 'var(--md-sys-color-primary)' }}>~/.config/matugen/colors.json</code> to apply your live Hyprland theme.
+              </p>
+
+              <form onSubmit={handleApplyMatugenJson}>
+                <textarea
+                  placeholder='{"colors": {"primary": "#e4b5cb", "surface": "#151218", ...}}'
+                  value={matugenJsonInput}
+                  onChange={(e) => setMatugenJsonInput(e.target.value)}
+                  style={{
+                    width: '100%',
+                    height: '140px',
+                    background: 'var(--md-sys-color-surface-container-high)',
+                    border: '1px solid var(--md-sys-color-outline-variant)',
+                    borderRadius: '12px',
+                    padding: '12px',
+                    color: '#fff',
+                    fontSize: '12px',
+                    fontFamily: 'var(--font-mono)',
+                    outline: 'none',
+                    resize: 'none',
+                    marginBottom: '16px'
+                  }}
+                />
+
+                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+                  <button type="button" className="section-btn" onClick={() => setShowJsonDialog(false)}>
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    className="section-btn"
+                    style={{ background: 'var(--md-sys-color-primary)', color: 'var(--md-sys-color-on-primary)', borderColor: 'var(--md-sys-color-primary)', fontWeight: 700 }}
+                  >
+                    Apply Theme
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

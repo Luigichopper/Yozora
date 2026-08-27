@@ -1,25 +1,26 @@
 import React, { useState } from 'react';
 import { HardDriveDownload, Play, Pause, Trash2, ArrowDown, ArrowUp, Plus, CheckCircle, Radio, FolderOpen } from 'lucide-react';
 import { useApp } from '../context/AppContext';
-import { MOCK_ANIME_DATABASE } from '../data/mockAniDB';
+import { anidbService } from '../services/anidbService';
 
 export const CacheManagerView: React.FC = () => {
-  const { downloadTasks, toggleDownloadPause, deleteDownloadTask, openPlayer } = useApp();
+  const { downloadTasks, toggleDownloadPause, deleteDownloadTask, addCustomMagnetTask, openPlayer, showToast } = useApp();
   const [customMagnetInput, setCustomMagnetInput] = useState('');
   const [showAddMagnetModal, setShowAddMagnetModal] = useState(false);
 
-  // Speed and storage stats
   const totalDownloadSpeed = downloadTasks.reduce((acc, curr) => acc + (curr.status === 'downloading' ? curr.downloadSpeed : 0), 0);
   const totalUploadSpeed = downloadTasks.reduce((acc, curr) => acc + curr.uploadSpeed, 0);
   const totalDownloadedBytes = downloadTasks.reduce((acc, curr) => acc + curr.downloadedBytes, 0);
   const totalGB = (totalDownloadedBytes / (1024 * 1024 * 1024)).toFixed(2);
 
-  const handleAddMagnet = (e: React.FormEvent) => {
+  const handleAddMagnet = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!customMagnetInput.trim()) return;
-    alert(`Magnet link parsed: ${customMagnetInput.slice(0, 40)}... (Connecting to DHT swarm)`);
-    setCustomMagnetInput('');
-    setShowAddMagnetModal(false);
+    const success = await addCustomMagnetTask(customMagnetInput.trim());
+    if (success) {
+      setCustomMagnetInput('');
+      setShowAddMagnetModal(false);
+    }
   };
 
   return (
@@ -31,7 +32,7 @@ export const CacheManagerView: React.FC = () => {
             离线缓存与种子管理器 • Torrent Cache Manager
           </h1>
           <p style={{ fontSize: '13px', color: 'var(--md-sys-color-on-surface-variant)', marginTop: '4px' }}>
-            Embedded BitTorrent swarm cache engine (P2P background worker)
+            Embedded BitTorrent swarm cache engine & offline media storage
           </p>
         </div>
 
@@ -48,7 +49,7 @@ export const CacheManagerView: React.FC = () => {
         <div style={{ background: 'var(--md-sys-color-surface-container)', border: '1px solid var(--md-sys-color-outline-variant)', borderRadius: '16px', padding: '16px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', color: '#4caf50' }}>
             <ArrowDown size={14} />
-            <span>Download Speed</span>
+            <span>Download Throughput</span>
           </div>
           <div style={{ fontSize: '22px', fontWeight: 800, color: '#fff', marginTop: '4px' }}>
             {(totalDownloadSpeed / 1024).toFixed(1)} MB/s
@@ -58,7 +59,7 @@ export const CacheManagerView: React.FC = () => {
         <div style={{ background: 'var(--md-sys-color-surface-container)', border: '1px solid var(--md-sys-color-outline-variant)', borderRadius: '16px', padding: '16px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', color: 'var(--md-sys-color-primary)' }}>
             <ArrowUp size={14} />
-            <span>Upload Speed</span>
+            <span>Upload Throughput</span>
           </div>
           <div style={{ fontSize: '22px', fontWeight: 800, color: '#fff', marginTop: '4px' }}>
             {(totalUploadSpeed / 1024).toFixed(1)} MB/s
@@ -82,7 +83,6 @@ export const CacheManagerView: React.FC = () => {
         ) : (
           downloadTasks.map(task => {
             const isCompleted = task.status === 'completed' || task.status === 'seeding';
-            const anime = MOCK_ANIME_DATABASE.find(a => a.id === task.animeId);
 
             return (
               <div
@@ -120,10 +120,36 @@ export const CacheManagerView: React.FC = () => {
                     <button
                       className="poster-overlay-play"
                       style={{ position: 'static', width: '32px', height: '32px' }}
-                      onClick={() => {
+                      onClick={async () => {
+                        const anime = await anidbService.getAnimeById(task.animeId);
                         if (anime) {
                           const ep = anime.episodes.find(e => e.epNumber === task.episodeNum) || anime.episodes[0];
                           openPlayer(anime, ep, task.videoUrl, task.sourceTitle);
+                        } else {
+                          // Custom magnet playback
+                          openPlayer({
+                            id: 'custom',
+                            anidbId: 99999,
+                            title: task.animeTitle,
+                            romajiTitle: task.animeTitle,
+                            japaneseTitle: task.animeTitle,
+                            type: 'TV',
+                            status: 'Finished',
+                            episodesCount: 1,
+                            season: '2025',
+                            year: 2025,
+                            rating: 8.5,
+                            votesCount: 100,
+                            poster: '',
+                            banner: '',
+                            synopsis: 'BitTorrent Swarm Cached Video Stream',
+                            genres: ['Cached'],
+                            tags: ['Offline'],
+                            studio: 'BitTorrent Swarm',
+                            airDateStart: '2025-01-01',
+                            episodes: [{ id: 1, epNumber: 1, title: task.sourceTitle, airDate: '2025-01-01', durationMinutes: 24 }],
+                            relations: []
+                          }, undefined, task.videoUrl, task.sourceTitle);
                         }
                       }}
                       title="Play Offline Video"
@@ -201,7 +227,7 @@ export const CacheManagerView: React.FC = () => {
 
               <form onSubmit={handleAddMagnet}>
                 <textarea
-                  placeholder="magnet:?xt=urn:btih:..."
+                  placeholder="magnet:?xt=urn:btih:3fa82b49e19d7b92138e6e58f00bbca4b76a0841&dn=Anime+Title..."
                   value={customMagnetInput}
                   onChange={(e) => setCustomMagnetInput(e.target.value)}
                   style={{

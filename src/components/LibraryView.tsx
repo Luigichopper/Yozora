@@ -1,8 +1,8 @@
-import React, { useState } from 'react';
-import { Star, Play, Plus, Check, FileDown, Layers, Clock, TrendingUp } from 'lucide-react';
+import React, { useState, useRef, useEffect } from 'react';
+import { Star, Play, Plus, Check, FileDown, FileUp, Layers, Clock, TrendingUp, BarChart2 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
-import { MOCK_ANIME_DATABASE } from '../data/mockAniDB';
-import { WatchStatus } from '../types/anime';
+import { anidbService } from '../services/anidbService';
+import { AnimeItem, WatchStatus } from '../types/anime';
 
 const STATUS_TABS: { key: WatchStatus | 'All'; label: string }[] = [
   { key: 'All', label: 'All (全部)' },
@@ -14,23 +14,44 @@ const STATUS_TABS: { key: WatchStatus | 'All'; label: string }[] = [
 ];
 
 export const LibraryView: React.FC = () => {
-  const { library, setAnimeStatus, setAnimeProgress, setSelectedAnime, openPlayer } = useApp();
+  const { library, setAnimeStatus, setAnimeProgress, setAnimeScore, setSelectedAnime, openPlayer, showToast } = useApp();
   const [activeStatusTab, setActiveStatusTab] = useState<WatchStatus | 'All'>('All');
+  const [animeMap, setAnimeMap] = useState<Record<string, AnimeItem>>({});
+  const [editingScoreId, setEditingScoreId] = useState<string | null>(null);
+  const [scoreInput, setScoreInput] = useState<number>(8.5);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-  // Match library entries with database
+  // Load full anime details for library items from anidbService
+  useEffect(() => {
+    async function loadLibraryAnime() {
+      const map: Record<string, AnimeItem> = {};
+      for (const id of Object.keys(library)) {
+        const item = await anidbService.getAnimeById(id);
+        if (item) map[id] = item;
+      }
+      setAnimeMap(map);
+    }
+    loadLibraryAnime();
+  }, [library]);
+
   const entries = Object.values(library).map(entry => {
-    const anime = MOCK_ANIME_DATABASE.find(a => a.id === entry.animeId);
+    const anime = animeMap[entry.animeId];
     return anime ? { anime, entry } : null;
-  }).filter((item): item is { anime: typeof MOCK_ANIME_DATABASE[0]; entry: typeof library[string] } => item !== null);
+  }).filter((item): item is { anime: AnimeItem; entry: typeof library[string] } => item !== null);
 
   const filteredEntries = entries.filter(({ entry }) => {
     if (activeStatusTab === 'All') return true;
     return entry.watchStatus === activeStatusTab;
   });
 
+  // Real Analytics calculations
   const totalWatching = entries.filter(e => e.entry.watchStatus === 'Watching').length;
   const totalCompleted = entries.filter(e => e.entry.watchStatus === 'Completed').length;
   const totalEps = entries.reduce((acc, curr) => acc + curr.entry.currentEpisode, 0);
+  const totalHoursWatched = ((totalEps * 24) / 60).toFixed(1);
+  const meanScore = entries.length > 0
+    ? (entries.reduce((acc, curr) => acc + (curr.entry.score || 8.0), 0) / entries.length).toFixed(1)
+    : '0.0';
 
   const handleExportAniDB = () => {
     const exportData = {
@@ -42,7 +63,8 @@ export const LibraryView: React.FC = () => {
         status: e.entry.watchStatus,
         watchedEpisodes: e.entry.currentEpisode,
         totalEpisodes: e.entry.totalEpisodes,
-        myScore: e.entry.score
+        myScore: e.entry.score || 8.0,
+        lastWatchedAt: e.entry.lastWatchedAt
       }))
     };
 
@@ -52,44 +74,88 @@ export const LibraryView: React.FC = () => {
     a.href = url;
     a.download = `yozora_anidb_library_${Date.now()}.json`;
     a.click();
+    showToast('Exported AniDB sync file!', 'success');
+  };
+
+  const handleImportAniDB = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = async (event) => {
+      try {
+        const json = JSON.parse(event.target?.result as string);
+        if (json.entries && Array.isArray(json.entries)) {
+          for (const item of json.entries) {
+            const animeId = `a${item.anidbId}`;
+            await setAnimeStatus(animeId, item.status || 'Watching');
+            await setAnimeProgress(animeId, item.watchedEpisodes || 1);
+            if (item.myScore) {
+              await setAnimeScore(animeId, item.myScore);
+            }
+          }
+          showToast(`Successfully imported ${json.entries.length} anime entries!`, 'success');
+        }
+      } catch (err) {
+        showToast('Failed to parse AniDB import JSON.', 'error');
+      }
+    };
+    reader.readAsText(file);
   };
 
   return (
     <div className="library-container">
+      <input
+        type="file"
+        ref={fileInputRef}
+        accept=".json"
+        style={{ display: 'none' }}
+        onChange={handleImportAniDB}
+      />
+
       {/* Header */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '20px' }}>
         <div>
           <h1 style={{ fontSize: '24px', fontWeight: 800, color: 'var(--md-sys-color-on-surface)' }}>
-            追番资料库 • Anime Watchlist
+            追番资料库 • Anime Watchlist & Analytics
           </h1>
           <p style={{ fontSize: '13px', color: 'var(--md-sys-color-on-surface-variant)', marginTop: '4px' }}>
-            Local-first tracking synchronized with AniDB ID space
+            Local-first SQLite/IndexedDB tracking synchronized with AniDB ID space
           </p>
         </div>
 
         <div style={{ display: 'flex', gap: '10px' }}>
+          <button className="section-btn" onClick={() => fileInputRef.current?.click()} title="Import AniDB Sync JSON">
+            <FileUp size={14} />
+            <span>Import Sync</span>
+          </button>
           <button className="section-btn" onClick={handleExportAniDB} title="Export AniDB Sync JSON">
             <FileDown size={14} />
-            <span>Export AniDB Sync</span>
+            <span>Export Sync</span>
           </button>
         </div>
       </div>
 
-      {/* Summary KPI Badges */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '14px', marginBottom: '24px' }}>
+      {/* Real Statistics Dashboard */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: '14px', marginBottom: '24px' }}>
         <div style={{ background: 'var(--md-sys-color-surface-container)', border: '1px solid var(--md-sys-color-outline-variant)', borderRadius: '16px', padding: '16px' }}>
           <div style={{ fontSize: '12px', color: 'var(--md-sys-color-on-surface-variant)' }}>Currently Watching</div>
           <div style={{ fontSize: '24px', fontWeight: 800, color: 'var(--md-sys-color-primary)', marginTop: '4px' }}>{totalWatching} titles</div>
         </div>
 
         <div style={{ background: 'var(--md-sys-color-surface-container)', border: '1px solid var(--md-sys-color-outline-variant)', borderRadius: '16px', padding: '16px' }}>
-          <div style={{ fontSize: '12px', color: 'var(--md-sys-color-on-surface-variant)' }}>Completed</div>
+          <div style={{ fontSize: '12px', color: 'var(--md-sys-color-on-surface-variant)' }}>Completed Series</div>
           <div style={{ fontSize: '24px', fontWeight: 800, color: '#4caf50', marginTop: '4px' }}>{totalCompleted} titles</div>
         </div>
 
         <div style={{ background: 'var(--md-sys-color-surface-container)', border: '1px solid var(--md-sys-color-outline-variant)', borderRadius: '16px', padding: '16px' }}>
-          <div style={{ fontSize: '12px', color: 'var(--md-sys-color-on-surface-variant)' }}>Episodes Logged</div>
-          <div style={{ fontSize: '24px', fontWeight: 800, color: '#ff9800', marginTop: '4px' }}>{totalEps} episodes</div>
+          <div style={{ fontSize: '12px', color: 'var(--md-sys-color-on-surface-variant)' }}>Watch Time (Hours)</div>
+          <div style={{ fontSize: '24px', fontWeight: 800, color: '#ff9800', marginTop: '4px' }}>{totalHoursWatched} hrs</div>
+        </div>
+
+        <div style={{ background: 'var(--md-sys-color-surface-container)', border: '1px solid var(--md-sys-color-outline-variant)', borderRadius: '16px', padding: '16px' }}>
+          <div style={{ fontSize: '12px', color: 'var(--md-sys-color-on-surface-variant)' }}>Mean Score</div>
+          <div style={{ fontSize: '24px', fontWeight: 800, color: '#ffeb3b', marginTop: '4px' }}>★ {meanScore}</div>
         </div>
       </div>
 
@@ -120,6 +186,8 @@ export const LibraryView: React.FC = () => {
         ) : (
           filteredEntries.map(({ anime, entry }) => {
             const progressPercent = Math.round((entry.currentEpisode / entry.totalEpisodes) * 100);
+            const isEditingScore = editingScoreId === anime.id;
+
             return (
               <div
                 key={anime.id}
@@ -131,8 +199,7 @@ export const LibraryView: React.FC = () => {
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'space-between',
-                  gap: '20px',
-                  transition: 'border-color 0.2s ease'
+                  gap: '20px'
                 }}
               >
                 {/* Left: Thumbnail & Info */}
@@ -176,8 +243,47 @@ export const LibraryView: React.FC = () => {
                   </div>
                 </div>
 
-                {/* Right: Actions */}
+                {/* Right: Personal Score & Actions */}
                 <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+                  {/* Personal Score Input / Display */}
+                  {isEditingScore ? (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px', background: 'var(--md-sys-color-surface-container-highest)', padding: '4px 10px', borderRadius: '10px' }}>
+                      <span style={{ fontSize: '12px', color: '#ffeb3b' }}>★</span>
+                      <input
+                        type="number"
+                        min="0"
+                        max="10"
+                        step="0.5"
+                        value={scoreInput}
+                        onChange={(e) => setScoreInput(parseFloat(e.target.value))}
+                        style={{ width: '45px', background: 'transparent', border: 'none', color: '#fff', fontSize: '13px', fontWeight: 700 }}
+                      />
+                      <button
+                        className="section-btn"
+                        style={{ padding: '2px 8px', fontSize: '11px' }}
+                        onClick={() => {
+                          setAnimeScore(anime.id, scoreInput);
+                          setEditingScoreId(null);
+                        }}
+                      >
+                        Save
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      className="section-btn"
+                      style={{ padding: '6px 10px', fontSize: '12px', color: '#ffeb3b', borderColor: 'rgba(255,235,59,0.3)' }}
+                      onClick={() => {
+                        setScoreInput(entry.score || 8.0);
+                        setEditingScoreId(anime.id);
+                      }}
+                      title="Edit Personal Score"
+                    >
+                      <Star size={13} fill="#ffeb3b" />
+                      <span>{entry.score ? entry.score.toFixed(1) : 'Rate'}</span>
+                    </button>
+                  )}
+
                   {/* +1 Episode Quick Increment Button */}
                   <button
                     className="section-btn"
@@ -212,7 +318,7 @@ export const LibraryView: React.FC = () => {
                     className="poster-overlay-play"
                     style={{ position: 'static', width: '36px', height: '36px' }}
                     onClick={() => {
-                      const nextEpNum = Math.min(entry.totalEpisodes, entry.currentEpisode + 1);
+                      const nextEpNum = Math.min(entry.totalEpisodes, entry.currentEpisode);
                       const ep = anime.episodes.find(e => e.epNumber === nextEpNum) || anime.episodes[0];
                       openPlayer(anime, ep);
                     }}
