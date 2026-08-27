@@ -2,7 +2,7 @@
 pkgname=yozora-git
 pkgver=0.1.0
 pkgrel=1
-pkgdesc="Native Arch/Hyprland anime tracking, browsing, and playback client with Matugen theming, rqbit streaming, and danmaku"
+pkgdesc="Native Arch/Hyprland anime tracking, browsing, and playback client with Matugen theming and rqbit streaming"
 arch=('x86_64' 'aarch64')
 url="https://github.com/Luigichopper/Yozora"
 license=('GPL-3.0-or-later')
@@ -35,6 +35,6 @@ build() {
 package() {
   cd "$srcdir/Yozora"
   install -Dm755 "src-tauri/target/release/yozora" "$pkgdir/usr/bin/yozora"
-  install -Dm644 "aur/yozora.desktop" "$pkgdir/usr/share/applications/yozora.desktop"
+  install -Dm644 "$srcdir/yozora.desktop" "$pkgdir/usr/share/applications/yozora.desktop"
   install -Dm644 "public/logo.svg" "$pkgdir/usr/share/icons/hicolor/scalable/apps/yozora.svg"
 }

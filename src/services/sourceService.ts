@@ -1,6 +1,5 @@
 import { TorrentSource } from '../types/anime';
 import { db } from './db';
-import { RSS_PROVIDERS, MOCK_SOURCES } from '../data/mockSources';
 
 export interface RSSFeedProvider {
   id: string;
@@ -10,15 +9,24 @@ export interface RSSFeedProvider {
   latencyMs: number;
 }
 
+export const DEFAULT_RSS_PROVIDERS: RSSFeedProvider[] = [
+  { id: 'nyaa', name: 'Nyaa.si (Global Tracker)', url: 'https://nyaa.si/?page=rss', enabled: true, latencyMs: 145 },
+  { id: 'mikan', name: 'Mikan Project (蜜柑计划)', url: 'https://mikanani.me/RSS/Classic', enabled: true, latencyMs: 82 },
+  { id: 'garden', name: 'Anime Garden (动漫花园)', url: 'https://share.dmhy.org/topics/rss/rss.xml', enabled: true, latencyMs: 95 },
+  { id: 'toshokan', name: 'Tokyo Toshokan', url: 'https://www.tokyotosho.info/rss.php', enabled: false, latencyMs: 210 },
+  { id: 'subsplease', name: 'SubsPlease Official RSS', url: 'https://subsplease.org/rss/?r=1080', enabled: true, latencyMs: 110 },
+  { id: 'acgrip', name: 'ACG.RIP Anime Index', url: 'https://acg.rip/feed', enabled: false, latencyMs: 175 }
+];
+
 class SourceService {
-  private providers: RSSFeedProvider[] = RSS_PROVIDERS;
+  private providers: RSSFeedProvider[] = DEFAULT_RSS_PROVIDERS;
 
   constructor() {
     this.initProviders();
   }
 
   private async initProviders() {
-    const saved = await db.getSetting<RSSFeedProvider[]>('rss_providers', RSS_PROVIDERS);
+    const saved = await db.getSetting<RSSFeedProvider[]>('rss_providers', DEFAULT_RSS_PROVIDERS);
     this.providers = saved;
   }
 
@@ -74,26 +82,21 @@ class SourceService {
     audio: 'FLAC 2.0' | 'AAC 2.0' | 'Opus 5.1';
     episodeNum?: number;
   } {
-    // Group extraction (e.g. "[SubsPlease] ...", "【极影字幕社】...")
     const groupMatch = title.match(/^[\[【]([^\]】]+)[\]】]/);
     const group = groupMatch ? groupMatch[1] : 'Release Group';
 
-    // Resolution
     let resolution: '1080p' | '720p' | '4K HDR' | '4K' | '2160p' = '1080p';
     if (/4k|2160p|uhd/i.test(title)) resolution = title.includes('HDR') ? '4K HDR' : '4K';
     else if (/720p/i.test(title)) resolution = '720p';
 
-    // Video Codec
     let codec: 'HEVC / H.265' | 'AVC / H.264' | 'AV1' = 'HEVC / H.265';
     if (/av1/i.test(title)) codec = 'AV1';
     else if (/x264|h264|avc/i.test(title) && !/hevc|h265|x265/i.test(title)) codec = 'AVC / H.264';
 
-    // Audio Codec
     let audio: 'FLAC 2.0' | 'AAC 2.0' | 'Opus 5.1' = 'AAC 2.0';
     if (/flac/i.test(title)) audio = 'FLAC 2.0';
     else if (/opus/i.test(title) || /5\.1/i.test(title)) audio = 'Opus 5.1';
 
-    // Episode number
     const epMatch = title.match(/(?:-|\[|\s)(?:EP|E|episode|\s)?(\d{1,4})(?:v\d)?(?:\]|\s|\.|$)/i);
     const episodeNum = epMatch ? parseInt(epMatch[1]) : undefined;
 
@@ -101,111 +104,96 @@ class SourceService {
   }
 
   /**
-   * Health Ranking Algorithm
+   * Fetch live RSS XML feed with CORS proxy failover
    */
-  public rankSources(sources: TorrentSource[]): TorrentSource[] {
-    return [...sources].sort((a, b) => {
-      let scoreA = a.seeders * 1.5;
-      let scoreB = b.seeders * 1.5;
-
-      if (a.resolution === '1080p') scoreA += 50;
-      if (a.resolution === '4K HDR') scoreA += 40;
-      if (b.resolution === '1080p') scoreB += 50;
-      if (b.resolution === '4K HDR') scoreB += 40;
-
-      if (a.codec === 'HEVC / H.265' || a.codec === 'AV1') scoreA += 30;
-      if (b.codec === 'HEVC / H.265' || b.codec === 'AV1') scoreB += 30;
-
-      if (a.audio === 'FLAC 2.0') scoreA += 20;
-      if (b.audio === 'FLAC 2.0') scoreB += 20;
-
-      const trustedGroups = ['SubsPlease', 'Erai-raws', 'Kamigami', 'SweetSub', 'B-Global', 'NC-Raws'];
-      if (trustedGroups.some(g => a.group.includes(g))) scoreA += 25;
-      if (trustedGroups.some(g => b.group.includes(g))) scoreB += 25;
-
-      return scoreB - scoreA;
-    });
-  }
-
-  /**
-   * Fetch live RSS XML feed with proxy fallback
-   */
-  public async fetchLiveRssXml(rssUrl: string): Promise<string> {
+  public async fetchLiveRssXml(feedUrl: string): Promise<string | null> {
     try {
-      // 1. Direct fetch attempt
-      const res = await fetch(rssUrl, { headers: { 'Accept': 'application/xml, text/xml' } });
+      const res = await fetch(feedUrl);
       if (res.ok) return await res.text();
-    } catch (e) {
-      // CORS block expected on direct cross-origin RSS, try CORS proxy
+    } catch {
+      // Fallback via CORS proxy if direct fetch is blocked
+      try {
+        const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(feedUrl)}`;
+        const pRes = await fetch(proxyUrl);
+        if (pRes.ok) return await pRes.text();
+      } catch (err) {
+        console.warn(`[RSS] Failed to fetch feed ${feedUrl}:`, err);
+      }
     }
-
-    try {
-      const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(rssUrl)}`;
-      const proxyRes = await fetch(proxyUrl);
-      if (proxyRes.ok) return await proxyRes.text();
-    } catch (err) {
-      console.warn('CORS proxy fetch failed for RSS feed:', rssUrl);
-    }
-
-    return '';
+    return null;
   }
 
   /**
-   * Parse XML string into TorrentSource list
+   * Parse RSS XML into TorrentSource array
    */
-  public parseRssXmlToSources(xmlStr: string, providerName: string, queryFilter?: string): TorrentSource[] {
+  public parseRssXmlToSources(xmlText: string, providerName: string, queryFilter?: string): TorrentSource[] {
     const parser = new DOMParser();
-    const doc = parser.parseFromString(xmlStr, 'application/xml');
-    const items = doc.querySelectorAll('item');
-    const results: TorrentSource[] = [];
+    const doc = parser.parseFromString(xmlText, 'text/xml');
+    const items = Array.from(doc.querySelectorAll('item'));
+    const sources: TorrentSource[] = [];
 
-    items.forEach((item, index) => {
+    items.forEach((item, idx) => {
       const title = item.querySelector('title')?.textContent || '';
-      if (queryFilter && !title.toLowerCase().includes(queryFilter.toLowerCase())) {
+      if (queryFilter && !title.toLowerCase().includes(queryFilter.toLowerCase().trim())) {
         return;
       }
 
       const link = item.querySelector('link')?.textContent || '';
-      const enclosure = item.querySelector('enclosure')?.getAttribute('url') || '';
-      const pubDate = item.querySelector('pubDate')?.textContent || new Date().toISOString().split('T')[0];
-      const seedersText = item.querySelector('nyaa\\:seeders, seeders')?.textContent || '50';
-      const leechersText = item.querySelector('nyaa\\:leechers, leechers')?.textContent || '5';
-      const infoHash = item.querySelector('nyaa\\:infoHash, infoHash')?.textContent || '';
+      const guid = item.querySelector('guid')?.textContent || `rss-${idx}`;
+      const pubDate = item.querySelector('pubDate')?.textContent || new Date().toISOString();
+      const seeders = parseInt(item.querySelector('nyaa\\:seeders, seeders')?.textContent || '120');
+      const leechers = parseInt(item.querySelector('nyaa\\:leechers, leechers')?.textContent || '15');
+      const size = item.querySelector('nyaa\\:size, size, contentLength')?.textContent || '1.35 GB';
 
-      const magnetLink = infoHash
-        ? `magnet:?xt=urn:btih:${infoHash}&dn=${encodeURIComponent(title)}`
-        : (link.startsWith('magnet:') ? link : `magnet:?xt=urn:btih:hash${index}&dn=${encodeURIComponent(title)}`);
+      const info = this.parseReleaseInfo(title);
 
-      const parsedInfo = this.parseReleaseInfo(title);
-
-      results.push({
-        id: `rss_${Date.now()}_${index}`,
+      sources.push({
+        id: `rss_${providerName}_${guid}_${idx}`,
         title,
-        group: parsedInfo.group,
-        resolution: parsedInfo.resolution,
-        codec: parsedInfo.codec,
-        audio: parsedInfo.audio,
-        fileSize: '1.35 GB',
-        seeders: parseInt(seedersText) || 120,
-        leechers: parseInt(leechersText) || 8,
-        uploadedDate: pubDate.slice(0, 16),
-        magnetLink,
-        provider: (providerName as any) || 'Nyaa',
-        episodeNum: parsedInfo.episodeNum || 1,
+        group: info.group,
+        resolution: info.resolution,
+        codec: info.codec,
+        audio: info.audio,
+        fileSize: size,
+        seeders,
+        leechers,
+        uploadedDate: pubDate.split(' ').slice(0, 4).join(' '),
+        magnetLink: link.startsWith('magnet:') ? link : `magnet:?xt=urn:btih:${guid}&dn=${encodeURIComponent(title)}`,
+        torrentUrl: link.endsWith('.torrent') ? link : undefined,
+        provider: providerName as any,
+        episodeNum: info.episodeNum,
         isCached: false
       });
     });
 
-    return results;
+    return sources;
   }
 
   /**
-   * Fetch live sources for an anime title from enabled RSS providers
+   * Rank sources by health score (seeders, resolution, codec, group reputation)
+   */
+  public rankSources(sources: TorrentSource[]): TorrentSource[] {
+    return [...sources].sort((a, b) => {
+      const score = (src: TorrentSource) => {
+        let pts = (src.seeders || 0) * 1.5;
+        if (src.resolution.includes('1080p')) pts += 80;
+        if (src.resolution.includes('4K')) pts += 120;
+        if (src.codec.includes('HEVC') || src.codec.includes('AV1')) pts += 50;
+        if (src.group.includes('SubsPlease') || src.group.includes('Erai') || src.group.includes('Kamigami')) pts += 40;
+        if (src.isCached) pts += 200;
+        return pts;
+      };
+      return score(b) - score(a);
+    });
+  }
+
+  /**
+   * Fetch live sources for an anime title from IndexedDB or enabled live RSS providers
    */
   public async getSourcesForAnime(animeId: string, animeTitle: string): Promise<TorrentSource[]> {
     // 1. Check cached database sources
     const cached = await db.getSourcesForAnime(animeId);
-    if (cached.length > 0) {
+    if (cached && cached.length > 0) {
       return this.rankSources(cached);
     }
 
@@ -232,67 +220,7 @@ class SourceService {
       return ranked;
     }
 
-    // 3. Fallback to rich mock or synthesized release feed
-    if (MOCK_SOURCES[animeId]) {
-      const sources = this.rankSources(MOCK_SOURCES[animeId]);
-      await db.saveSources(animeId, sources);
-      return sources;
-    }
-
-    const synthesized: TorrentSource[] = [
-      {
-        id: `src-${animeId}-sub-01`,
-        title: `[SubsPlease] ${animeTitle} - 01 (1080p) [HEVC 10-bit FLAC]`,
-        group: 'SubsPlease',
-        resolution: '1080p',
-        codec: 'HEVC / H.265',
-        audio: 'FLAC 2.0',
-        fileSize: '1.42 GB',
-        seeders: 428,
-        leechers: 14,
-        uploadedDate: new Date().toISOString().split('T')[0],
-        magnetLink: `magnet:?xt=urn:btih:3fa82b49e19d7b92138e6e58f00bbca4b76a0841&dn=${encodeURIComponent(animeTitle + ' 01')}`,
-        provider: 'Nyaa',
-        episodeNum: 1,
-        isCached: true
-      },
-      {
-        id: `src-${animeId}-erai-01`,
-        title: `[Erai-raws] ${animeTitle} - 01 [Multiple Subtitle] [1080p] [AV1]`,
-        group: 'Erai-raws',
-        resolution: '1080p',
-        codec: 'AV1',
-        audio: 'Opus 5.1',
-        fileSize: '1.18 GB',
-        seeders: 312,
-        leechers: 11,
-        uploadedDate: new Date().toISOString().split('T')[0],
-        magnetLink: `magnet:?xt=urn:btih:5ea83c21a09d7b92138e6e58f00bbca4b76a9921&dn=${encodeURIComponent(animeTitle + ' 01 Erai')}`,
-        provider: 'Anime Garden',
-        episodeNum: 1,
-        isCached: false
-      },
-      {
-        id: `src-${animeId}-sweet-01`,
-        title: `[Kamigami&SweetSub] ${animeTitle} [01] [CHS&CHT] [1080p HEVC]`,
-        group: 'Kamigami',
-        resolution: '1080p',
-        codec: 'HEVC / H.265',
-        audio: 'AAC 2.0',
-        fileSize: '1.05 GB',
-        seeders: 285,
-        leechers: 8,
-        uploadedDate: new Date().toISOString().split('T')[0],
-        magnetLink: `magnet:?xt=urn:btih:8bb82c19e19d7b92138e6e58f00bbca4b76a1122&dn=${encodeURIComponent(animeTitle + ' 01 Kamigami')}`,
-        provider: 'Mikan Project',
-        episodeNum: 1,
-        isCached: false
-      }
-    ];
-
-    const ranked = this.rankSources(synthesized);
-    await db.saveSources(animeId, ranked);
-    return ranked;
+    return [];
   }
 }
 

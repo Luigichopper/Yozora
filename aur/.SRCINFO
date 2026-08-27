@@ -1,5 +1,5 @@
 pkgbase = yozora-git
-	pkgdesc = Native Arch/Hyprland anime tracking, browsing, and playback client with Matugen theming, rqbit streaming, and danmaku
+	pkgdesc = Native Arch/Hyprland anime tracking, browsing, and playback client with Matugen theming and rqbit streaming
 	pkgver = 0.1.0
 	pkgrel = 1
 	url = https://github.com/Luigichopper/Yozora

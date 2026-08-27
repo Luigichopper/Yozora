@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
-import { X, Calendar, Clock, Star, Play } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { X, Calendar, Clock, Star, Play, Loader2 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
-import { MOCK_ANIME_DATABASE } from '../data/mockAniDB';
+import { anidbService } from '../services/anidbService';
+import { AnimeItem } from '../types/anime';
 
 const DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'] as const;
 const DAYS_CN: Record<string, string> = {
@@ -17,10 +18,32 @@ const DAYS_CN: Record<string, string> = {
 export const ScheduleModal: React.FC = () => {
   const { isScheduleOpen, setIsScheduleOpen, setSelectedAnime, openPlayer } = useApp();
   const [selectedDay, setSelectedDay] = useState<string>('Friday');
+  const [scheduleList, setScheduleList] = useState<AnimeItem[]>([]);
+  const [isLoading, setIsLoading] = useState<boolean>(false);
+
+  useEffect(() => {
+    if (!isScheduleOpen) return;
+    let isMounted = true;
+
+    async function loadSchedule() {
+      setIsLoading(true);
+      try {
+        const items = await anidbService.getScheduleAnime(selectedDay);
+        if (isMounted) setScheduleList(items);
+      } catch (err) {
+        console.warn('Failed to load schedule:', err);
+      } finally {
+        if (isMounted) setIsLoading(false);
+      }
+    }
+
+    loadSchedule();
+    return () => { isMounted = false; };
+  }, [isScheduleOpen, selectedDay]);
 
   if (!isScheduleOpen) return null;
 
-  const dayAnime = MOCK_ANIME_DATABASE.filter(a => a.broadcastDay === selectedDay || (!a.broadcastDay && selectedDay === 'Friday'));
+  const dayAnime = scheduleList.filter(a => a.broadcastDay === selectedDay || (!a.broadcastDay && selectedDay === 'Friday'));
 
   return (
     <div className="modal-overlay" onClick={() => setIsScheduleOpen(false)}>
@@ -44,7 +67,7 @@ export const ScheduleModal: React.FC = () => {
             <div>
               <h2 style={{ fontSize: '18px', fontWeight: 800, color: '#fff' }}>新番时间表 • Seasonal Airing Timetable</h2>
               <span style={{ fontSize: '12px', color: 'var(--md-sys-color-on-surface-variant)' }}>
-                Spring 2026 / JST Broadcast Times from AniDB
+                Spring 2026 / JST Broadcast Times from AniList & IndexedDB
               </span>
             </div>
           </div>
@@ -86,7 +109,12 @@ export const ScheduleModal: React.FC = () => {
 
         {/* Anime Broadcast Grid */}
         <div style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '14px', maxHeight: '60vh', overflowY: 'auto' }}>
-          {dayAnime.length === 0 ? (
+          {isLoading ? (
+            <div style={{ textAlign: 'center', padding: '40px', color: 'var(--md-sys-color-primary)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
+              <Loader2 size={24} className="spin-animation" />
+              <span>Loading schedule...</span>
+            </div>
+          ) : dayAnime.length === 0 ? (
             <div style={{ textAlign: 'center', padding: '40px', color: 'var(--md-sys-color-on-surface-variant)' }}>
               No airing anime registered on {selectedDay} in local cache.
             </div>

@@ -10,11 +10,7 @@ import {
   RotateCcw,
   RotateCw,
   FastForward,
-  MessageSquare,
   Activity,
-  Sliders,
-  Send,
-  Sparkles,
   FolderOpen,
   Link,
   RefreshCw,
@@ -24,26 +20,13 @@ import {
   Radio
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
-import { DanmakuEngine } from './DanmakuEngine';
-import { SAMPLE_VIDEOS } from '../data/mockDanmaku';
 import { streamService, AnimeStreamSource } from '../services/streamService';
 import { rqbitService } from '../services/rqbitService';
-
 
 export const PlayerView: React.FC = () => {
   const {
     playerState,
     closePlayer,
-    danmakuEnabled,
-    setDanmakuEnabled,
-    danmakuOpacity,
-    setDanmakuOpacity,
-    danmakuFontSize,
-    setDanmakuFontSize,
-    danmakuSpeedMultiplier,
-    setDanmakuSpeedMultiplier,
-    danmakuComments,
-    addDanmakuComment,
     showToast
   } = useApp();
 
@@ -52,7 +35,7 @@ export const PlayerView: React.FC = () => {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const hlsInstanceRef = useRef<any>(null);
 
-  const [currentVideoSrc, setCurrentVideoSrc] = useState<string>(playerState?.videoUrl || SAMPLE_VIDEOS.default);
+  const [currentVideoSrc, setCurrentVideoSrc] = useState<string>(playerState?.videoUrl || '');
   const [streamMirrors, setStreamMirrors] = useState<AnimeStreamSource[]>([]);
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [currentTime, setCurrentTime] = useState<number>(0);
@@ -63,7 +46,6 @@ export const PlayerView: React.FC = () => {
   const [playbackSpeed, setPlaybackSpeed] = useState<number>(1.0);
   const [showControls, setShowControls] = useState<boolean>(true);
   const [showStatsForNerds, setShowStatsForNerds] = useState<boolean>(false);
-  const [showDanmakuConfig, setShowDanmakuConfig] = useState<boolean>(false);
   const [showUrlDialog, setShowUrlDialog] = useState<boolean>(false);
   const [customStreamUrl, setCustomStreamUrl] = useState<string>('');
   const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
@@ -85,11 +67,6 @@ export const PlayerView: React.FC = () => {
     bufferPercent: 0
   });
 
-  // Danmaku input state
-  const [danmakuInput, setDanmakuInput] = useState<string>('');
-  const [danmakuColor, setDanmakuColor] = useState<string>('#ffffff');
-  const [danmakuMode, setDanmakuMode] = useState<'scroll' | 'top' | 'bottom'>('scroll');
-
   const controlsTimeoutRef = useRef<number | null>(null);
   const lastOpSkipTriggerRef = useRef<boolean>(false);
 
@@ -98,206 +75,245 @@ export const PlayerView: React.FC = () => {
     if (playerState) {
       const initPlayer = async () => {
         setHasVideoError(false);
-        setIsPlaying(false);
-        setCurrentTime(0);
-        lastOpSkipTriggerRef.current = false;
-
-        const mirrors = await streamService.resolveEpisodeStream(
+        const resolved = await streamService.resolveEpisodeStream(
           playerState.anime.id,
           playerState.anime.title,
           playerState.anime.romajiTitle,
           playerState.episode.epNumber
         );
-        setStreamMirrors(mirrors);
+        setStreamMirrors(resolved);
 
-        const initialSrc = playerState.videoUrl || mirrors[0]?.url || `http://127.0.0.1:3030/torrents/0/stream/0`;
+        const initialSrc = playerState.videoUrl || (resolved.length > 0 ? resolved[0].url : '');
         setCurrentVideoSrc(initialSrc);
       };
+
       initPlayer();
     }
   }, [playerState]);
 
-  // Load and play video stream
+  // Handle Video Source and Hls.js setup
   useEffect(() => {
     const video = videoRef.current;
-    if (video && currentVideoSrc) {
-      setHasVideoError(false);
+    if (!video || !currentVideoSrc) return;
 
+    if (hlsInstanceRef.current) {
+      hlsInstanceRef.current.destroy();
+      hlsInstanceRef.current = null;
+    }
+
+    const hls = streamService.attachHlsPlayer(video, currentVideoSrc, () => {
+      video.play().then(() => {
+        setIsPlaying(true);
+        setNeedsUserClickToStart(false);
+        setHasVideoError(false);
+      }).catch((err) => {
+        console.warn('Autoplay prevented:', err);
+        setNeedsUserClickToStart(true);
+      });
+    });
+
+    if (hls) {
+      hlsInstanceRef.current = hls;
+    } else {
+      video.load();
+      video.play().then(() => {
+        setIsPlaying(true);
+        setNeedsUserClickToStart(false);
+        setHasVideoError(false);
+      }).catch((err) => {
+        console.warn('Autoplay blocked:', err);
+        setNeedsUserClickToStart(true);
+      });
+    }
+
+    return () => {
       if (hlsInstanceRef.current) {
         hlsInstanceRef.current.destroy();
         hlsInstanceRef.current = null;
       }
-
-      if (currentVideoSrc.includes('.m3u8')) {
-        const hls = streamService.attachHlsPlayer(video, currentVideoSrc, () => {
-          video.play()
-            .then(() => {
-              setIsPlaying(true);
-              setNeedsUserClickToStart(false);
-            })
-            .catch((err) => {
-              console.warn('Autoplay pending user gesture:', err);
-              setNeedsUserClickToStart(true);
-              setIsPlaying(false);
-            });
-        });
-        hlsInstanceRef.current = hls;
-      } else {
-        video.src = currentVideoSrc;
-        video.play()
-          .then(() => {
-            setIsPlaying(true);
-            setNeedsUserClickToStart(false);
-          })
-          .catch((err) => {
-            console.warn('Autoplay pending user gesture:', err);
-            setNeedsUserClickToStart(true);
-            setIsPlaying(false);
-          });
-      }
-    }
+    };
   }, [currentVideoSrc]);
 
-  // Auto-skip opening
-  useEffect(() => {
-    if (autoSkipOp && playerState?.episode.opSkipStart && playerState.episode.opSkipEnd) {
-      if (
-        currentTime >= playerState.episode.opSkipStart &&
-        currentTime < playerState.episode.opSkipStart + 2 &&
-        !lastOpSkipTriggerRef.current
-      ) {
-        lastOpSkipTriggerRef.current = true;
-        skipOp();
-      }
-    }
-  }, [currentTime, autoSkipOp, playerState]);
-
-  const handleVideoError = () => {
-    console.warn('Video stream error on URL:', currentVideoSrc);
-    // Cycle to next available mirror or fallback
-    const currentIndex = streamMirrors.findIndex(m => m.url === currentVideoSrc);
-    if (currentIndex >= 0 && currentIndex < streamMirrors.length - 1) {
-      const nextMirror = streamMirrors[currentIndex + 1];
-      setCurrentVideoSrc(nextMirror.url);
-      showToast(`Server 1 failed. Switched to ${nextMirror.server}`, 'info');
-    } else if (streamMirrors.length > 0 && currentVideoSrc !== streamMirrors[0].url) {
-      setCurrentVideoSrc(streamMirrors[0].url);
-      showToast('Switched to primary streaming mirror', 'info');
-    } else if (currentVideoSrc !== SAMPLE_VIDEOS.default) {
-      setCurrentVideoSrc(SAMPLE_VIDEOS.default);
-      showToast('Switched to reliable backup video stream', 'info');
-    } else {
-      setHasVideoError(true);
-    }
-  };
-
-  const lastQualityRef = useRef<{ totalFrames: number; time: number }>({ totalFrames: 0, time: performance.now() });
-
-  const handleMouseMove = () => {
-    setShowControls(true);
-    if (controlsTimeoutRef.current) {
-      window.clearTimeout(controlsTimeoutRef.current);
-    }
-    controlsTimeoutRef.current = window.setTimeout(() => {
-      if (isPlaying) {
-        setShowControls(false);
-      }
-    }, 4000);
-  };
-
+  // Video time & buffer tracking
   const handleTimeUpdate = () => {
     const video = videoRef.current;
-    if (video) {
-      const t = video.currentTime;
-      setCurrentTime(t);
+    if (!video) return;
 
-      let realDropped = 0;
-      let realFps = telemetry.fps;
+    const cur = video.currentTime;
+    setCurrentTime(cur);
 
-      // Real HTML5 Video Playback Quality measurement
-      if (typeof video.getVideoPlaybackQuality === 'function') {
-        const q = video.getVideoPlaybackQuality();
-        realDropped = q.droppedVideoFrames;
+    if (video.buffered.length > 0) {
+      const bufEnd = video.buffered.end(video.buffered.length - 1);
+      setBufferedTime(bufEnd);
+    }
 
-        const now = performance.now();
-        const deltaMs = now - lastQualityRef.current.time;
-        if (deltaMs >= 800) {
-          const deltaFrames = q.totalVideoFrames - lastQualityRef.current.totalFrames;
-          if (deltaFrames > 0) {
-            realFps = Math.max(1, Math.min(144, Math.round((deltaFrames / deltaMs) * 1000)));
-          }
-          lastQualityRef.current = { totalFrames: q.totalVideoFrames, time: now };
-        }
-      } else if ((video as any).webkitDroppedFrameCount !== undefined) {
-        realDropped = (video as any).webkitDroppedFrameCount;
-      }
-
-      if (video.buffered.length > 0) {
-        const buf = video.buffered.end(video.buffered.length - 1);
-        setBufferedTime(buf);
-        setTelemetry({
-          videoWidth: video.videoWidth || 1920,
-          videoHeight: video.videoHeight || 1080,
-          fps: realFps,
-          droppedFrames: realDropped,
-          bitrateKbps: 0,
-          bufferPercent: Math.round((buf / (video.duration || 1)) * 100)
-        });
+    // Auto Skip Opening
+    if (autoSkipOp && playerState?.episode.opSkipEnd) {
+      const start = playerState.episode.opSkipStart || 90;
+      const end = playerState.episode.opSkipEnd;
+      if (cur >= start && cur < end && !lastOpSkipTriggerRef.current) {
+        lastOpSkipTriggerRef.current = true;
+        video.currentTime = end;
+        showToast(`Auto-skipped Opening (OP) to ${formatTime(end)}`, 'info');
+      } else if (cur < start || cur > end) {
+        lastOpSkipTriggerRef.current = false;
       }
     }
   };
 
   const handleLoadedMetadata = () => {
     const video = videoRef.current;
-    if (video) {
-      setDuration(video.duration || 1440);
+    if (!video) return;
+    setDuration(video.duration || 1440);
+    setTelemetry(prev => ({
+      ...prev,
+      videoWidth: video.videoWidth || 1920,
+      videoHeight: video.videoHeight || 1080
+    }));
+  };
+
+  // Video error handling
+  const handleVideoError = () => {
+    console.warn(`[Player] Video load error on source: ${currentVideoSrc}`);
+    setHasVideoError(true);
+    setIsPlaying(false);
+  };
+
+  // Switch Stream Mirror
+  const handleSwitchMirror = (mirror: AnimeStreamSource) => {
+    setCurrentVideoSrc(mirror.url);
+    setHasVideoError(false);
+    showToast(`Switched to stream: ${mirror.server}`, 'info');
+  };
+
+  // Update Telemetry & dropped frames
+  useEffect(() => {
+    const interval = window.setInterval(() => {
+      const video = videoRef.current;
+      if (!video) return;
+
+      let dropped = 0;
+      if ((video as any).getVideoPlaybackQuality) {
+        const q = (video as any).getVideoPlaybackQuality();
+        dropped = q.droppedVideoFrames || 0;
+      }
+
+      const dur = duration || 1440;
+      const bufPct = Math.min(100, Math.round((bufferedTime / dur) * 100));
+
       setTelemetry(prev => ({
         ...prev,
-        videoWidth: video.videoWidth || 1920,
-        videoHeight: video.videoHeight || 1080,
-        bufferPercent: 25
+        droppedFrames: dropped,
+        bufferPercent: bufPct
       }));
-    }
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [bufferedTime, duration]);
+
+  // Controls auto-hide
+  const handleMouseMove = () => {
+    setShowControls(true);
+    if (controlsTimeoutRef.current) window.clearTimeout(controlsTimeoutRef.current);
+    controlsTimeoutRef.current = window.setTimeout(() => {
+      if (isPlaying) {
+        setShowControls(false);
+      }
+    }, 3500);
   };
+
+  // Keybindings
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (['input', 'textarea'].includes((e.target as HTMLElement).tagName.toLowerCase())) {
+        return;
+      }
+
+      switch (e.code) {
+        case 'Space':
+          e.preventDefault();
+          togglePlay();
+          break;
+        case 'ArrowLeft':
+          e.preventDefault();
+          seekDelta(-10);
+          break;
+        case 'ArrowRight':
+          e.preventDefault();
+          seekDelta(10);
+          break;
+        case 'ArrowUp':
+          e.preventDefault();
+          adjustVolume(0.1);
+          break;
+        case 'ArrowDown':
+          e.preventDefault();
+          adjustVolume(-0.1);
+          break;
+        case 'KeyF':
+          e.preventDefault();
+          toggleFullscreen();
+          break;
+        case 'KeyM':
+          e.preventDefault();
+          toggleMute();
+          break;
+        case 'Escape':
+          if (isFullscreen) toggleFullscreen();
+          else closePlayer();
+          break;
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isPlaying, isFullscreen, volume, isMuted, currentTime, duration]);
 
   const togglePlay = () => {
-    if (videoRef.current) {
-      if (isPlaying) {
-        videoRef.current.pause();
-        setIsPlaying(false);
-      } else {
-        videoRef.current.play()
-          .then(() => {
-            setIsPlaying(true);
-            setNeedsUserClickToStart(false);
-          })
-          .catch((err) => {
-            console.warn('Playback click error:', err);
-          });
-      }
+    const video = videoRef.current;
+    if (!video) return;
+    if (video.paused) {
+      video.play().then(() => {
+        setIsPlaying(true);
+        setNeedsUserClickToStart(false);
+      }).catch(console.error);
+    } else {
+      video.pause();
+      setIsPlaying(false);
     }
   };
 
-  const handleSeekbarMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
-    const rect = e.currentTarget.getBoundingClientRect();
-    const hoverX = e.clientX - rect.left;
-    const ratio = Math.max(0, Math.min(1, hoverX / rect.width));
-    setHoverPositionX(hoverX);
-    setHoverTime(ratio * duration);
+  const seekDelta = (delta: number) => {
+    const video = videoRef.current;
+    if (!video) return;
+    const nextTime = Math.max(0, Math.min(duration, video.currentTime + delta));
+    video.currentTime = nextTime;
+    setCurrentTime(nextTime);
   };
 
-  const handleSeekbarMouseLeave = () => {
-    setHoverTime(null);
-  };
-
-  const handleSeek = (e: React.MouseEvent<HTMLDivElement>) => {
-    const rect = e.currentTarget.getBoundingClientRect();
-    const clickX = e.clientX - rect.left;
-    const seekRatio = Math.max(0, Math.min(1, clickX / rect.width));
-    const newTime = seekRatio * duration;
-    setCurrentTime(newTime);
+  const adjustVolume = (delta: number) => {
+    const nextVol = Math.max(0, Math.min(1, volume + delta));
+    setVolume(nextVol);
     if (videoRef.current) {
-      videoRef.current.currentTime = newTime;
+      videoRef.current.volume = nextVol;
+      videoRef.current.muted = false;
+    }
+    setIsMuted(false);
+  };
+
+  const toggleMute = () => {
+    if (videoRef.current) {
+      videoRef.current.muted = !isMuted;
+    }
+    setIsMuted(!isMuted);
+  };
+
+  const toggleFullscreen = () => {
+    if (!containerRef.current) return;
+    if (!document.fullscreenElement) {
+      containerRef.current.requestFullscreen().then(() => setIsFullscreen(true)).catch(console.error);
+    } else {
+      document.exitFullscreen().then(() => setIsFullscreen(false)).catch(console.error);
     }
   };
 
@@ -306,35 +322,37 @@ export const PlayerView: React.FC = () => {
     if (videoRef.current) {
       videoRef.current.playbackRate = speed;
     }
+    showToast(`Playback speed: ${speed}x`, 'info');
   };
 
-  const toggleFullscreen = () => {
-    if (!document.fullscreenElement) {
-      containerRef.current?.requestFullscreen();
-      setIsFullscreen(true);
-    } else {
-      document.exitFullscreen();
-      setIsFullscreen(false);
+  const handleSeek = (e: React.MouseEvent<HTMLDivElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const pos = (e.clientX - rect.left) / rect.width;
+    const target = pos * duration;
+    setCurrentTime(target);
+    if (videoRef.current) {
+      videoRef.current.currentTime = target;
     }
   };
 
-  const handleSendDanmaku = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!danmakuInput.trim()) return;
-    await addDanmakuComment(danmakuInput.trim(), danmakuColor, danmakuMode, currentTime);
-    showToast(`Danmaku posted at ${formatTime(currentTime)}!`, 'success');
-    setDanmakuInput('');
+  const handleSeekbarMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const pos = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    setHoverTime(pos * duration);
+    setHoverPositionX(e.clientX - rect.left);
+  };
+
+  const handleSeekbarMouseLeave = () => {
+    setHoverTime(null);
   };
 
   const handleLocalFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      const fileUrl = URL.createObjectURL(file);
-      setCurrentVideoSrc(fileUrl);
-      setIsPlaying(true);
-      setNeedsUserClickToStart(false);
+      const url = URL.createObjectURL(file);
+      setCurrentVideoSrc(url);
       setHasVideoError(false);
-      showToast(`Loaded local anime video: ${file.name}`, 'success');
+      showToast(`Loaded local file: ${file.name}`, 'success');
     }
   };
 
@@ -342,11 +360,9 @@ export const PlayerView: React.FC = () => {
     e.preventDefault();
     if (customStreamUrl.trim()) {
       setCurrentVideoSrc(customStreamUrl.trim());
-      setIsPlaying(true);
       setShowUrlDialog(false);
-      setCustomStreamUrl('');
       setHasVideoError(false);
-      showToast('Loaded custom stream URL', 'success');
+      showToast('Loaded custom stream endpoint', 'info');
     }
   };
 
@@ -392,17 +408,6 @@ export const PlayerView: React.FC = () => {
         playsInline
       />
 
-      {/* Canvas Danmaku Engine */}
-      <DanmakuEngine
-        comments={danmakuComments}
-        currentTime={currentTime}
-        isPlaying={isPlaying}
-        enabled={danmakuEnabled}
-        opacity={danmakuOpacity}
-        fontSize={danmakuFontSize}
-        speedMultiplier={danmakuSpeedMultiplier}
-      />
-
       {/* Click to start / Resume Playback overlay */}
       {needsUserClickToStart && !isPlaying && (
         <div
@@ -443,7 +448,7 @@ export const PlayerView: React.FC = () => {
         </div>
       )}
 
-      {/* BitTorrent Streaming & Daemon Controller Overlay */}
+      {/* Video / Stream Error & Mirror Switcher Overlay */}
       {hasVideoError && (
         <div
           style={{
@@ -453,242 +458,100 @@ export const PlayerView: React.FC = () => {
             flexDirection: 'column',
             alignItems: 'center',
             justifyContent: 'center',
-            background: 'rgba(18, 15, 20, 0.94)',
-            backdropFilter: 'blur(20px)',
-            zIndex: 34,
-            padding: '24px',
-            textAlign: 'center'
+            background: 'rgba(10, 8, 14, 0.9)',
+            backdropFilter: 'blur(14px)',
+            zIndex: 36,
+            padding: '24px'
           }}
         >
-          <div
-            style={{
-              width: '64px',
-              height: '64px',
-              borderRadius: '50%',
-              background: 'var(--md-sys-color-primary-container)',
-              color: 'var(--md-sys-color-on-primary-container)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              marginBottom: '16px',
-              boxShadow: '0 0 30px rgba(228, 181, 203, 0.3)'
-            }}
-          >
-            <Radio size={32} />
-          </div>
-
-          <h3 style={{ fontSize: '20px', fontWeight: 800, color: '#fff', marginBottom: '6px' }}>
-            BitTorrent Sequential Streaming Swarm
-          </h3>
-
-          <div style={{ fontSize: '13px', color: 'var(--md-sys-color-primary)', fontWeight: 600, marginBottom: '8px' }}>
-            {playerState.anime.title} — EP {playerState.episode.epNumber.toString().padStart(2, '0')}: {playerState.episode.title}
-          </div>
-
-          <p style={{ fontSize: '12px', color: 'var(--md-sys-color-on-surface-variant)', maxWidth: '520px', lineHeight: 1.6, marginBottom: '20px' }}>
-            Yozora streams directly from P2P torrent swarms via the <code>rqbit</code> background daemon. Start the local daemon or launch directly in native <code>mpv</code> for hardware-accelerated decode.
+          <AlertCircle size={44} color="#f44336" style={{ marginBottom: '12px' }} />
+          <h2 style={{ fontSize: '20px', fontWeight: 800, color: '#fff', marginBottom: '6px' }}>
+            Playback Stream Unreachable
+          </h2>
+          <p style={{ fontSize: '13px', color: 'var(--md-sys-color-on-surface-variant)', textAlign: 'center', maxWidth: '480px', marginBottom: '20px' }}>
+            Current stream endpoint is not responding. Choose an alternate mirror, load a local file, or provide a custom stream URL.
           </p>
 
-          {/* Active Release Card */}
-          <div
-            style={{
-              background: 'var(--md-sys-color-surface-container-high)',
-              border: '1px solid var(--md-sys-color-outline-variant)',
-              borderRadius: '16px',
-              padding: '14px 20px',
-              maxWidth: '560px',
-              width: '100%',
-              marginBottom: '22px',
-              textAlign: 'left'
-            }}
-          >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
-              <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--md-sys-color-primary)', background: 'var(--md-sys-color-primary-container)', padding: '2px 8px', borderRadius: '4px' }}>
-                Active Swarm Target
-              </span>
-              <span style={{ fontSize: '11px', color: '#4caf50', fontWeight: 600 }}>
-                ▲ 428 seeders • ▼ 14 leechers
-              </span>
-            </div>
-            <div style={{ fontSize: '13px', fontWeight: 600, color: '#fff', wordBreak: 'break-all' }}>
-              {playerState.sourceTitle || `${playerState.anime.title} - Episode 01 (1080p)`}
-            </div>
-            <div style={{ fontSize: '11px', color: 'var(--md-sys-color-on-surface-variant)', marginTop: '4px', fontFamily: 'var(--font-mono)' }}>
-              Endpoint: {currentVideoSrc}
-            </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', width: '100%', maxWidth: '440px', marginBottom: '20px' }}>
+            {streamMirrors.map((mirror, idx) => (
+              <button
+                key={idx}
+                onClick={() => handleSwitchMirror(mirror)}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  background: currentVideoSrc === mirror.url ? 'var(--md-sys-color-primary-container)' : 'var(--md-sys-color-surface-container-high)',
+                  border: '1px solid var(--md-sys-color-outline-variant)',
+                  borderRadius: '12px',
+                  padding: '10px 16px',
+                  color: '#fff',
+                  cursor: 'pointer',
+                  fontSize: '13px'
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                  <Radio size={16} color="var(--md-sys-color-primary)" />
+                  <span style={{ fontWeight: 600 }}>{mirror.server}</span>
+                </div>
+                <span style={{ fontSize: '11px', color: 'var(--md-sys-color-primary)' }}>{mirror.quality}</span>
+              </button>
+            ))}
           </div>
 
-          <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', justifyContent: 'center' }}>
-            <button
-              className="section-btn"
-              onClick={async () => {
-                showToast('Starting rqbit background daemon on port 3030...', 'info');
-                const status = await rqbitService.startServer();
-                if (status.running) {
-                  showToast('rqbit daemon online! Retrying stream...', 'success');
-                  setHasVideoError(false);
-                  if (videoRef.current) {
-                    videoRef.current.src = currentVideoSrc;
-                    videoRef.current.play().catch(() => {});
-                  }
-                } else {
-                  showToast('rqbit is starting. You can also run: rqbit server start ~/.cache/yozora', 'info');
-                }
-              }}
-              style={{ background: 'var(--md-sys-color-primary)', color: 'var(--md-sys-color-on-primary)', borderColor: 'var(--md-sys-color-primary)', fontWeight: 700, padding: '8px 18px' }}
-            >
-              <RefreshCw size={14} />
-              <span>Start rqbit Daemon</span>
-            </button>
-
-            <button
-              className="section-btn"
-              onClick={async () => {
-                const ok = await rqbitService.launchExternalMpv(currentVideoSrc, playerState.anime.title);
-                if (ok) {
-                  showToast('Launched stream in external mpv!', 'success');
-                } else {
-                  showToast('Launch command dispatched. (Ensure mpv is installed via pacman -S mpv)', 'info');
-                }
-              }}
-              style={{ padding: '8px 16px' }}
-            >
-              <Play size={14} fill="currentColor" />
-              <span>Launch External mpv</span>
-            </button>
-
+          <div style={{ display: 'flex', gap: '12px' }}>
             <button
               className="section-btn"
               onClick={() => fileInputRef.current?.click()}
-              style={{ padding: '8px 16px' }}
+              style={{ background: 'var(--md-sys-color-primary)', color: 'var(--md-sys-color-on-primary)', border: 'none' }}
             >
-              <FolderOpen size={14} />
-              <span>Load Local Anime File</span>
+              <FolderOpen size={16} />
+              <span>Open Local MKV / MP4</span>
+            </button>
+
+            <button
+              className="section-btn"
+              onClick={() => setShowUrlDialog(true)}
+            >
+              <Link size={16} />
+              <span>Custom Stream URL</span>
             </button>
           </div>
         </div>
       )}
 
-      {/* Stats for Nerds (mpv OSD Telemetry) */}
+      {/* Stats for Nerds / mpv OSD overlay */}
       {showStatsForNerds && (
-        <div className="stats-for-nerds-panel">
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
-            <span style={{ fontWeight: 700, color: 'var(--md-sys-color-primary)' }}>libmpv 0.38 / Wayland Telemetry</span>
-            <button
-              onClick={() => setShowStatsForNerds(false)}
-              style={{ background: 'none', border: 'none', color: '#fff', cursor: 'pointer' }}
-            >
+        <div className="stats-for-nerds">
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+            <span style={{ fontWeight: 800, color: 'var(--md-sys-color-primary)' }}>⚡ Yozora Playback Telemetry</span>
+            <button onClick={() => setShowStatsForNerds(false)} style={{ background: 'none', border: 'none', color: '#aaa', cursor: 'pointer' }}>
               <X size={14} />
             </button>
           </div>
           <div className="stats-row">
-            <span className="stats-key">Engine Pipeline:</span>
-            <span className="stats-val">Hardware VAAPI / WebGL Dec</span>
+            <span className="stats-key">Source Title:</span>
+            <span className="stats-val" title={playerState.sourceTitle}>{playerState.sourceTitle?.slice(0, 34)}...</span>
           </div>
           <div className="stats-row">
-            <span className="stats-key">Resolution:</span>
-            <span className="stats-val">{telemetry.videoWidth}x{telemetry.videoHeight} @ {telemetry.fps} fps</span>
+            <span className="stats-key">Dimensions:</span>
+            <span className="stats-val">{telemetry.videoWidth}x{telemetry.videoHeight}</span>
+          </div>
+          <div className="stats-row">
+            <span className="stats-key">Framerate:</span>
+            <span className="stats-val">{telemetry.fps} fps</span>
           </div>
           <div className="stats-row">
             <span className="stats-key">Dropped Frames:</span>
-            <span className="stats-val" style={{ color: telemetry.droppedFrames > 0 ? '#ff9800' : '#4caf50' }}>
-              {telemetry.droppedFrames} frames dropped
-            </span>
+            <span className="stats-val">{telemetry.droppedFrames}</span>
+          </div>
+          <div className="stats-row">
+            <span className="stats-key">Playback Rate:</span>
+            <span className="stats-val">{playbackSpeed}x</span>
           </div>
           <div className="stats-row">
             <span className="stats-key">Buffer Window:</span>
             <span className="stats-val">{bufferedTime.toFixed(1)}s ({telemetry.bufferPercent}%)</span>
-          </div>
-          <div className="stats-row">
-            <span className="stats-key">Danmaku Stream:</span>
-            <span className="stats-val">{danmakuComments.length} comments ({danmakuEnabled ? 'Rendering' : 'Disabled'})</span>
-          </div>
-        </div>
-      )}
-
-      {/* Danmaku Config Drawer */}
-      {showDanmakuConfig && (
-        <div
-          style={{
-            position: 'absolute',
-            bottom: '90px',
-            right: '24px',
-            background: 'rgba(21, 18, 24, 0.94)',
-            backdropFilter: 'blur(16px)',
-            border: '1px solid var(--md-sys-color-outline-variant)',
-            borderRadius: '20px',
-            padding: '18px',
-            width: '280px',
-            zIndex: 40,
-            boxShadow: '0 10px 30px rgba(0,0,0,0.6)'
-          }}
-        >
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
-            <span style={{ fontSize: '13px', fontWeight: 700, color: 'var(--md-sys-color-primary)' }}>Danmaku Settings (弹幕设置)</span>
-            <button
-              onClick={() => setShowDanmakuConfig(false)}
-              style={{ background: 'none', border: 'none', color: '#fff', cursor: 'pointer' }}
-            >
-              <X size={14} />
-            </button>
-          </div>
-
-          <div style={{ marginBottom: '12px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', marginBottom: '4px' }}>
-              <span>Opacity (不透明度)</span>
-              <span>{Math.round(danmakuOpacity * 100)}%</span>
-            </div>
-            <input
-              type="range"
-              min="0.1"
-              max="1.0"
-              step="0.05"
-              value={danmakuOpacity}
-              onChange={(e) => setDanmakuOpacity(parseFloat(e.target.value))}
-              style={{ width: '100%', accentColor: 'var(--md-sys-color-primary)' }}
-            />
-          </div>
-
-          <div style={{ marginBottom: '12px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', marginBottom: '4px' }}>
-              <span>Font Size (字号大小)</span>
-              <span>{danmakuFontSize}px</span>
-            </div>
-            <input
-              type="range"
-              min="16"
-              max="36"
-              step="2"
-              value={danmakuFontSize}
-              onChange={(e) => setDanmakuFontSize(parseInt(e.target.value))}
-              style={{ width: '100%', accentColor: 'var(--md-sys-color-primary)' }}
-            />
-          </div>
-
-          <div style={{ marginBottom: '14px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', marginBottom: '4px' }}>
-              <span>Scroll Speed (弹幕速度)</span>
-              <span>{danmakuSpeedMultiplier}x</span>
-            </div>
-            <input
-              type="range"
-              min="0.6"
-              max="1.8"
-              step="0.2"
-              value={danmakuSpeedMultiplier}
-              onChange={(e) => setDanmakuSpeedMultiplier(parseFloat(e.target.value))}
-              style={{ width: '100%', accentColor: 'var(--md-sys-color-primary)' }}
-            />
-          </div>
-
-          <div style={{ borderTop: '1px solid rgba(255,255,255,0.08)', paddingTop: '10px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <span style={{ fontSize: '12px' }}>Auto Skip Opening</span>
-            <input
-              type="checkbox"
-              checked={autoSkipOp}
-              onChange={(e) => setAutoSkipOp(e.target.checked)}
-              style={{ accentColor: 'var(--md-sys-color-primary)' }}
-            />
           </div>
         </div>
       )}
@@ -748,55 +611,32 @@ export const PlayerView: React.FC = () => {
             <X size={22} />
           </button>
           <div>
-            <div style={{ fontSize: '15px', fontWeight: 700, color: '#fff' }}>
-              {playerState.anime.title} — EP {playerState.episode.epNumber.toString().padStart(2, '0')}: {playerState.episode.title}
-            </div>
-            <div style={{ fontSize: '12px', color: 'var(--md-sys-color-primary)', marginTop: '2px' }}>
-              {playerState.sourceTitle}
-            </div>
+            <h2 style={{ fontSize: '15px', fontWeight: 700, color: '#fff' }}>
+              {playerState.anime.title}
+            </h2>
+            <p style={{ fontSize: '12px', color: 'var(--md-sys-color-on-surface-variant)' }}>
+              Episode {playerState.episode.epNumber} — {playerState.episode.title}
+            </p>
           </div>
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-          {/* Dynamic Anime Stream Servers Dropdown */}
-          <select
-            value={currentVideoSrc}
-            onChange={(e) => {
-              setCurrentVideoSrc(e.target.value);
-              showToast('Switched streaming server', 'info');
-            }}
-            style={{
-              background: 'rgba(255, 255, 255, 0.12)',
-              color: '#fff',
-              border: '1px solid var(--md-sys-color-outline-variant)',
-              borderRadius: '999px',
-              padding: '6px 12px',
-              fontSize: '12px',
-              cursor: 'pointer'
-            }}
-          >
-            {streamMirrors.map((m, idx) => (
-              <option key={idx} value={m.url} style={{ background: '#1c1524' }}>
-                {m.server} ({m.quality})
-              </option>
-            ))}
-          </select>
-
+        {/* Quick Action Top Bar */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           <button
             className="section-btn"
             style={{ padding: '6px 12px', fontSize: '12px' }}
             onClick={() => fileInputRef.current?.click()}
-            title="Open Local Video File (.mp4, .mkv, .webm)"
+            title="Load local file"
           >
-            <FolderOpen size={14} />
-            <span>Open Local File</span>
+            <Film size={14} />
+            <span>Local File</span>
           </button>
 
           <button
             className="section-btn"
             style={{ padding: '6px 12px', fontSize: '12px' }}
             onClick={() => setShowUrlDialog(!showUrlDialog)}
-            title="Custom Stream URL"
+            title="Load custom stream URL"
           >
             <Link size={14} />
             <span>Stream URL</span>
@@ -945,89 +785,8 @@ export const PlayerView: React.FC = () => {
             </span>
           </div>
 
-          {/* Center: Danmaku Input Bar */}
-          <form
-            onSubmit={handleSendDanmaku}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              background: 'rgba(255, 255, 255, 0.12)',
-              borderRadius: '999px',
-              padding: '2px 14px 2px 8px',
-              gap: '8px',
-              maxWidth: '420px',
-              flex: 1,
-              margin: '0 20px'
-            }}
-          >
-            <input
-              type="color"
-              value={danmakuColor}
-              onChange={(e) => setDanmakuColor(e.target.value)}
-              style={{ width: '22px', height: '22px', border: 'none', background: 'transparent', cursor: 'pointer' }}
-              title="Danmaku Color"
-            />
-
-            <input
-              type="text"
-              placeholder={`Send danmaku at ${formatTime(currentTime)}...`}
-              value={danmakuInput}
-              onChange={(e) => setDanmakuInput(e.target.value)}
-              style={{
-                background: 'transparent',
-                border: 'none',
-                color: '#fff',
-                fontSize: '12px',
-                flex: 1,
-                outline: 'none'
-              }}
-            />
-
-            <button
-              type="submit"
-              style={{
-                background: 'var(--md-sys-color-primary)',
-                color: 'var(--md-sys-color-on-primary)',
-                border: 'none',
-                borderRadius: '50%',
-                width: '26px',
-                height: '26px',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                cursor: 'pointer'
-              }}
-              title="Send Bullet Comment"
-            >
-              <Send size={12} />
-            </button>
-          </form>
-
           {/* Right Controls */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <button
-              className="section-btn"
-              style={{
-                background: danmakuEnabled ? 'var(--md-sys-color-primary-container)' : 'rgba(255,255,255,0.1)',
-                color: danmakuEnabled ? 'var(--md-sys-color-on-primary-container)' : '#aaa',
-                border: 'none',
-                padding: '6px 12px'
-              }}
-              onClick={() => setDanmakuEnabled(!danmakuEnabled)}
-              title="Toggle Danmaku (D)"
-            >
-              <MessageSquare size={14} />
-              <span>{danmakuEnabled ? '弹幕开' : '弹幕关'}</span>
-            </button>
-
-            <button
-              className="mpv-btn"
-              onClick={() => setShowDanmakuConfig(!showDanmakuConfig)}
-              title="Danmaku Config"
-            >
-              <Sliders size={18} />
-            </button>
-
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
             <select
               value={playbackSpeed}
               onChange={(e) => handleSpeedChange(parseFloat(e.target.value))}

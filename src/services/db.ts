@@ -1,4 +1,4 @@
-import { AnimeItem, DanmakuComment, DownloadTask, LibraryEntry, TorrentSource } from '../types/anime';
+import { AnimeItem, DownloadTask, LibraryEntry, TorrentSource } from '../types/anime';
 
 const DB_NAME = 'yozora_db';
 const DB_VERSION = 1;
@@ -23,12 +23,6 @@ export class YozoraDB {
         // Store for library watch status
         if (!db.objectStoreNames.contains('library_store')) {
           db.createObjectStore('library_store', { keyPath: 'animeId' });
-        }
-
-        // Store for danmaku comments keyed by animeId_epNumber
-        if (!db.objectStoreNames.contains('danmaku_store')) {
-          const danmakuStore = db.createObjectStore('danmaku_store', { keyPath: 'id' });
-          danmakuStore.createIndex('epKey', 'epKey', { unique: false });
         }
 
         // Store for offline BitTorrent downloads and cache
@@ -158,31 +152,6 @@ export class YozoraDB {
   async saveLibraryEntry(entry: LibraryEntry): Promise<void> {
     const store = await this.getStore('library_store', 'readwrite');
     store.put(entry);
-  }
-
-  // --- Danmaku Store ---
-  async getDanmakuForEpisode(animeId: string, epNumber: number): Promise<DanmakuComment[]> {
-    const store = await this.getStore('danmaku_store', 'readonly');
-    const index = store.index('epKey');
-    const epKey = `${animeId}_${epNumber}`;
-    return new Promise((resolve) => {
-      const req = index.getAll(epKey);
-      req.onsuccess = () => resolve(req.result || []);
-      req.onerror = () => {
-        console.error(`IndexedDB getDanmakuForEpisode failed for ${epKey}:`, req.error);
-        resolve([]);
-      };
-    });
-  }
-
-  async saveDanmakuComment(animeId: string, epNumber: number, comment: DanmakuComment): Promise<void> {
-    const store = await this.getStore('danmaku_store', 'readwrite');
-    store.put({
-      ...comment,
-      epKey: `${animeId}_${epNumber}`,
-      animeId,
-      epNumber
-    });
   }
 
   // --- Downloads & Cache Store ---

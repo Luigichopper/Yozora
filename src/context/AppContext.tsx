@@ -2,7 +2,6 @@ import React, { createContext, useContext, useState, useEffect, ReactNode } from
 import {
   AnimeItem,
   Episode,
-  DanmakuComment,
   TorrentSource,
   DownloadTask,
   LibraryEntry,
@@ -13,11 +12,9 @@ import { MATUGEN_PALETTES, applyMatugenTheme } from '../theme/matugen';
 import { db } from '../services/db';
 import { anidbService } from '../services/anidbService';
 import { sourceService } from '../services/sourceService';
-import { danmakuService } from '../services/danmakuService';
 import { streamService } from '../services/streamService';
 import { rqbitService } from '../services/rqbitService';
 import { torrentEngine } from '../services/torrentEngine';
-import { SAMPLE_VIDEOS } from '../data/mockDanmaku';
 
 export type ActiveView = 'discover' | 'browse' | 'library' | 'cache' | 'settings';
 
@@ -43,20 +40,10 @@ interface AppContextType {
   isScheduleOpen: boolean;
   setIsScheduleOpen: (open: boolean) => void;
   
-  // Playback & Danmaku
+  // Playback
   playerState: ActivePlayerState | null;
   openPlayer: (anime: AnimeItem, episode?: Episode, videoUrl?: string, sourceTitle?: string) => void;
   closePlayer: () => void;
-  danmakuEnabled: boolean;
-  setDanmakuEnabled: (enabled: boolean) => void;
-  danmakuOpacity: number;
-  setDanmakuOpacity: (opacity: number) => void;
-  danmakuFontSize: number;
-  setDanmakuFontSize: (size: number) => void;
-  danmakuSpeedMultiplier: number;
-  setDanmakuSpeedMultiplier: (mult: number) => void;
-  danmakuComments: DanmakuComment[];
-  addDanmakuComment: (text: string, color?: string, mode?: 'scroll' | 'top' | 'bottom', exactTime?: number) => Promise<void>;
 
   // Theming
   activePalette: MatugenPalette;
@@ -82,7 +69,7 @@ interface AppContextType {
   searchQuery: string;
   setSearchQuery: (q: string) => void;
 
-  // Toast Notification System (replaces alerts)
+  // Toast Notification System
   toasts: ToastMessage[];
   showToast: (text: string, type?: 'info' | 'success' | 'warning' | 'error') => void;
 }
@@ -99,13 +86,6 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   // Theme state
   const [activePalette, setActivePaletteState] = useState<MatugenPalette>(MATUGEN_PALETTES[0]);
   const [blurEnabled, setBlurEnabled] = useState<boolean>(true);
-
-  // Danmaku state
-  const [danmakuEnabled, setDanmakuEnabled] = useState<boolean>(true);
-  const [danmakuOpacity, setDanmakuOpacity] = useState<number>(0.85);
-  const [danmakuFontSize, setDanmakuFontSize] = useState<number>(24);
-  const [danmakuSpeedMultiplier, setDanmakuSpeedMultiplier] = useState<number>(1.0);
-  const [danmakuComments, setDanmakuComments] = useState<DanmakuComment[]>([]);
 
   // Library & Cache state backed by IndexedDB
   const [library, setLibrary] = useState<Record<string, LibraryEntry>>({});
@@ -163,7 +143,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       opSkipEnd: 180
     });
     
-    // Resolve authentic BitTorrent stream for this specific anime & episode
+    // Resolve authentic stream for this specific anime & episode
     let chosenVideo = videoUrl;
     if (!chosenVideo) {
       const resolvedStreams = await streamService.resolveEpisodeStream(anime.id, anime.title, anime.romajiTitle, ep.epNumber);
@@ -173,17 +153,13 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         chosenVideo = `http://127.0.0.1:3030/torrents/0/stream/0`;
       }
     }
-    
-    // Load danmaku comments for this exact episode from danmakuService
-    const comments = await danmakuService.getDanmaku(anime.id, ep.epNumber);
-    setDanmakuComments(comments);
 
     setPlayerState({
       isOpen: true,
       anime,
       episode: ep,
       videoUrl: chosenVideo,
-      sourceTitle: sourceTitle || `[SubsPlease] ${anime.title} - ${ep.epNumber.toString().padStart(2, '0')} (1080p)`
+      sourceTitle: sourceTitle || `[Direct / BitTorrent] ${anime.title} - EP ${ep.epNumber.toString().padStart(2, '0')}`
     });
 
     // Update library watching progress
@@ -192,26 +168,6 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   const closePlayer = () => {
     setPlayerState(null);
-  };
-
-  const addDanmakuComment = async (
-    text: string,
-    color = '#ffffff',
-    mode: 'scroll' | 'top' | 'bottom' = 'scroll',
-    exactTime = 0
-  ) => {
-    if (!playerState) return;
-    const newComment = await danmakuService.sendDanmaku(
-      playerState.anime.id,
-      playerState.episode.epNumber,
-      text,
-      color,
-      mode,
-      exactTime
-    );
-    if (newComment) {
-      setDanmakuComments(prev => [...prev, newComment]);
-    }
   };
 
   const setAnimeStatus = async (animeId: string, status: WatchStatus) => {
@@ -465,16 +421,6 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         playerState,
         openPlayer,
         closePlayer,
-        danmakuEnabled,
-        setDanmakuEnabled,
-        danmakuOpacity,
-        setDanmakuOpacity,
-        danmakuFontSize,
-        setDanmakuFontSize,
-        danmakuSpeedMultiplier,
-        setDanmakuSpeedMultiplier,
-        danmakuComments,
-        addDanmakuComment,
         activePalette,
         setActivePalette,
         blurEnabled,

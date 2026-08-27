@@ -1,5 +1,6 @@
 export type AnimeType = 'TV' | 'Movie' | 'OVA' | 'ONA' | 'Special';
-export type AnimeStatus = 'Airing' | 'Finished' | 'Upcoming';
+export type AnimeFormat = 'TV' | 'TV_SHORT' | 'MOVIE' | 'SPECIAL' | 'OVA' | 'ONA' | 'MUSIC';
+export type AnimeStatus = 'Airing' | 'Finished' | 'Upcoming' | 'FINISHED' | 'RELEASING' | 'NOT_YET_RELEASED' | 'CANCELLED' | 'HIATUS';
 export type WatchStatus = 'Watching' | 'Plan to Watch' | 'Completed' | 'On Hold' | 'Dropped';
 
 export interface Episode {
@@ -54,16 +55,6 @@ export interface AnimeItem {
   bannerSubtitle?: string;
   episodes: Episode[];
   relations: AnimeRelation[];
-}
-
-export interface DanmakuComment {
-  id: string;
-  time: number; // seconds into playback
-  text: string;
-  color: string;
-  mode: 'scroll' | 'top' | 'bottom';
-  size: 'small' | 'normal' | 'large';
-  user?: string;
 }
 
 export interface TorrentSource {
@@ -135,4 +126,75 @@ export interface MatugenPalette {
   outline: string;
   outlineVariant: string;
   accentGlow: string;
+}
+
+export interface AnimeMedia {
+  id: string;
+  idMal?: number;
+  title: {
+    romaji: string;
+    english: string;
+    native: string;
+    userPreferred: string;
+  };
+  coverImage: {
+    extraLarge: string;
+    large: string;
+    medium: string;
+    color?: string;
+  };
+  bannerImage?: string;
+  description: string;
+  status: AnimeStatus;
+  episodes?: number;
+  duration?: number;
+  genres: string[];
+  averageScore?: number;
+  popularity?: number;
+  nextAiringEpisode?: {
+    airingTime: number;
+    timeUntilAiring: number;
+    episode: number;
+  };
+}
+
+export interface AnimeEpisode {
+  id: string;
+  number: number;
+  title?: string;
+  description?: string;
+  image?: string;
+  isFiller?: boolean;
+}
+
+export interface SubtitleTrack {
+  url: string;
+  lang: string;
+  label: string;
+  isDefault?: boolean;
+}
+
+export interface VideoSource {
+  url: string;
+  isM3U8: boolean;
+  quality: string;
+}
+
+export interface StreamData {
+  headers?: Record<string, string>;
+  sources: VideoSource[];
+  subtitles: SubtitleTrack[];
+  download?: string;
+  intro?: { start: number; end: number };
+  outro?: { start: number; end: number };
+}
+
+export interface WatchProgress {
+  mediaId: string;
+  episodeId: string;
+  episodeNumber: number;
+  progressSeconds: number;
+  durationSeconds: number;
+  lastUpdated: number;
+  completed: boolean;
 }

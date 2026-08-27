@@ -1,6 +1,5 @@
 import { AnimeItem, Episode, AnimeRelation } from '../types/anime';
 import { db } from './db';
-import { MOCK_ANIME_DATABASE } from '../data/mockAniDB';
 
 interface AniDBCredentials {
   clientName: string;
@@ -8,6 +7,8 @@ interface AniDBCredentials {
 }
 
 const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days TTL per spec
+
+const DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'] as const;
 
 class AniDBService {
   private lastRequestTime = 0;
@@ -19,19 +20,11 @@ class AniDBService {
 
   constructor() {
     this.initCredentials();
-    this.seedInitialDatabase();
   }
 
   private async initCredentials() {
     const creds = await db.getSetting<AniDBCredentials>('anidb_credentials', this.credentials);
     this.credentials = creds;
-  }
-
-  private async seedInitialDatabase() {
-    const cached = await db.getAllCachedAnime();
-    if (cached.length === 0) {
-      await db.saveBulkAnime(MOCK_ANIME_DATABASE);
-    }
   }
 
   public async setCredentials(creds: AniDBCredentials): Promise<void> {
@@ -69,7 +62,7 @@ class AniDBService {
   ): Promise<{ items: AnimeItem[]; hasNextPage: boolean }> {
     // Check local database first
     const cachedAll = await db.getAllCachedAnime();
-    let localItems = cachedAll.length > 0 ? cachedAll : MOCK_ANIME_DATABASE;
+    let localItems = cachedAll;
 
     if (query.trim()) {
       const q = query.toLowerCase().trim();
@@ -94,7 +87,7 @@ class AniDBService {
     }
 
     // If online and (few local matches or querying specifically), query live API
-    if (navigator.onLine && (localItems.length < 5 || (query.trim() && localItems.length < 10))) {
+    if (typeof navigator !== 'undefined' && navigator.onLine && (localItems.length < 5 || (query.trim() && localItems.length < 10))) {
       try {
         const liveResult = await this.fetchLiveGraphQL(query, filterOptions, page, perPage);
         if (liveResult.items.length > 0) {
@@ -121,13 +114,7 @@ class AniDBService {
    * Fetch Trending Anime for Discover View
    */
   public async getTrendingAnime(perPage = 10): Promise<AnimeItem[]> {
-    const cached = await db.getAllCachedAnime();
-    const trendingLocal = cached.filter(a => a.isTrending || a.isHotBanner);
-    if (trendingLocal.length >= 4) {
-      return trendingLocal;
-    }
-
-    if (navigator.onLine) {
+    if (typeof navigator !== 'undefined' && navigator.onLine) {
       try {
         await this.rateLimitDelay();
         const gqlQuery = `
@@ -148,6 +135,11 @@ class AniDBService {
                 averageScore
                 genres
                 studios(isMain: true) { nodes { name } }
+                nextAiringEpisode {
+                  airingAt
+                  timeUntilAiring
+                  episode
+                }
               }
             }
           }
@@ -168,11 +160,12 @@ class AniDBService {
       }
     }
 
-    return MOCK_ANIME_DATABASE.filter(a => a.isTrending || a.isHotBanner);
+    const cached = await db.getAllCachedAnime();
+    return cached.filter(a => a.isTrending || a.isHotBanner);
   }
 
   /**
-   * Fetch anime details by ID with TTL check (7 days eviction)
+   * Fetch anime details by ID with TTL check (7 days eviction) and live API fetch fallback
    */
   public async getAnimeById(id: string): Promise<AnimeItem | null> {
     const record = await db.getAnimeCacheRecord(id);
@@ -185,13 +178,64 @@ class AniDBService {
       }
     }
 
-    const mockFound = MOCK_ANIME_DATABASE.find(a => a.id === id);
-    if (mockFound) {
-      await db.saveAnime(mockFound);
-      return mockFound;
+    // Try fetching from live GraphQL by ID
+    const rawId = parseInt(id.replace(/^a/, ''));
+    if (!isNaN(rawId) && typeof navigator !== 'undefined' && navigator.onLine) {
+      try {
+        await this.rateLimitDelay();
+        const gqlQuery = `
+          query ($id: Int) {
+            Media(id: $id, type: ANIME) {
+              id
+              idMal
+              title { romaji english native }
+              coverImage { extraLarge large }
+              bannerImage
+              description
+              episodes
+              format
+              status
+              season
+              seasonYear
+              averageScore
+              genres
+              studios(isMain: true) { nodes { name } }
+            }
+          }
+        `;
+        const res = await fetch('https://graphql.anilist.co', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ query: gqlQuery, variables: { id: rawId } })
+        });
+        const json = await res.json();
+        if (json?.data?.Media) {
+          const item = this.mapMediaToAnimeItem(json.data.Media);
+          await db.saveAnime(item);
+          return item;
+        }
+      } catch (e) {
+        console.warn(`Failed to fetch live anime details for ${id}:`, e);
+      }
     }
 
     return null;
+  }
+
+  /**
+   * Fetch Schedule / Airing Timetable
+   */
+  public async getScheduleAnime(day?: string): Promise<AnimeItem[]> {
+    const cached = await db.getAllCachedAnime();
+    if (cached.length > 0) {
+      if (day) {
+        return cached.filter(a => a.broadcastDay === day);
+      }
+      return cached;
+    }
+
+    // If cache is empty, fetch trending to seed
+    return await this.getTrendingAnime(20);
   }
 
   private async fetchLiveGraphQL(
@@ -243,6 +287,11 @@ class AniDBService {
             averageScore
             genres
             studios(isMain: true) { nodes { name } }
+            nextAiringEpisode {
+              airingAt
+              timeUntilAiring
+              episode
+            }
           }
         }
       }
@@ -278,6 +327,26 @@ class AniDBService {
 
     const cleanSynopsis = (m.description || 'No synopsis available.').replace(/<[^>]*>?/gm, '');
 
+    type BroadcastDay = 'Monday' | 'Tuesday' | 'Wednesday' | 'Thursday' | 'Friday' | 'Saturday' | 'Sunday';
+    let broadcastDay: BroadcastDay = 'Saturday';
+    if (m.nextAiringEpisode?.airingAt) {
+      const date = new Date(m.nextAiringEpisode.airingAt * 1000);
+      const dayIndex = date.getUTCDay();
+      const dayMap: Record<number, BroadcastDay> = {
+        0: 'Sunday',
+        1: 'Monday',
+        2: 'Tuesday',
+        3: 'Wednesday',
+        4: 'Thursday',
+        5: 'Friday',
+        6: 'Saturday'
+      };
+      broadcastDay = dayMap[dayIndex] || 'Saturday';
+    } else {
+      const idx = (m.id || 0) % 7;
+      broadcastDay = DAYS[idx];
+    }
+
     return {
       id: `a${m.idMal || m.id}`,
       anidbId: m.idMal || m.id,
@@ -299,7 +368,7 @@ class AniDBService {
       tags: m.genres || ['Anime'],
       studio: m.studios?.nodes?.[0]?.name || 'Animation Studio',
       airDateStart: `${m.seasonYear || 2025}-01-01`,
-      broadcastDay: 'Saturday',
+      broadcastDay,
       broadcastTime: '23:30 JST',
       isTrending: true,
       synopsis: cleanSynopsis,

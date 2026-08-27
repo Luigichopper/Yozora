@@ -44,7 +44,7 @@ export const AppContent: React.FC = () => {
       {/* Seasonal Airing Schedule Modal */}
       <ScheduleModal />
 
-      {/* Embedded mpv Video Player with Danmaku */}
+      {/* Embedded Video Player */}
       {playerState?.isOpen && <PlayerView />}
     </div>
   );
