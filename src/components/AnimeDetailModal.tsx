@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { X, Play, Star, Plus, Check, Download, Layers, Radio, ExternalLink, Calendar, Film, Bookmark, Loader2 } from 'lucide-react';
+import { X, Play, Star, Plus, Check, Layers, Radio, ExternalLink, Calendar, Film, Bookmark, Loader2 } from 'lucide-react';
 import { AnimeItem, Episode, TorrentSource, WatchStatus } from '../types/anime';
 import { useApp } from '../context/AppContext';
 import { sourceService } from '../services/sourceService';
@@ -12,7 +12,7 @@ interface AnimeDetailModalProps {
 }
 
 export const AnimeDetailModal: React.FC<AnimeDetailModalProps> = ({ anime, onClose }) => {
-  const { openPlayer, library, setAnimeStatus, setAnimeProgress, addDownloadTask, showToast, setSelectedAnime } = useApp();
+  const { openPlayer, library, setAnimeStatus, setAnimeProgress, showToast, setSelectedAnime } = useApp();
 
   const [activeTab, setActiveTab] = useState<'overview' | 'episodes' | 'sources'>('overview');
   const [sources, setSources] = useState<TorrentSource[]>([]);
@@ -116,16 +116,16 @@ export const AnimeDetailModal: React.FC<AnimeDetailModalProps> = ({ anime, onClo
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px', flexWrap: 'wrap' }}>
                 <span
                   style={{
-                    background: 'rgba(255, 152, 0, 0.2)',
-                    color: '#ff9800',
+                    background: 'rgba(2, 169, 255, 0.2)',
+                    color: '#02a9ff',
                     fontSize: '11px',
                     fontWeight: 700,
                     padding: '2px 8px',
                     borderRadius: '6px',
-                    border: '1px solid rgba(255, 152, 0, 0.4)'
+                    border: '1px solid rgba(2, 169, 255, 0.4)'
                   }}
                 >
-                  AniDB #{anime.anidbId}
+                  AniList #{anime.id}
                 </span>
                 <span
                   style={{
@@ -194,8 +194,13 @@ export const AnimeDetailModal: React.FC<AnimeDetailModalProps> = ({ anime, onClo
                   showToast(`Connecting release & launching mpv for "${anime.title}"...`, 'info');
                   const s = await sourceService.getSourcesForAnime(anime.id, anime.title, anime.romajiTitle);
                   if (s.length > 0) {
+                    const uri = sourceService.getSourceUri(s[0]);
+                    if (!uri) {
+                      showToast('No valid magnet link or .torrent URL found for this release', 'warning');
+                      return;
+                    }
                     try {
-                      const res = await rqbitService.addTorrentAndGetStream(s[0].magnetLink, anime.title);
+                      const res = await rqbitService.addTorrentAndGetStream(uri, anime.title);
                       if (res?.stream_url) {
                         await rqbitService.launchExternalMpv(res.stream_url, anime.title);
                         showToast('Launched in external mpv!', 'success');
@@ -494,29 +499,16 @@ export const AnimeDetailModal: React.FC<AnimeDetailModalProps> = ({ anime, onClo
                     <div style={{ display: 'flex', gap: '8px' }}>
                       <button
                         className="section-btn"
-                        style={{ padding: '8px 14px' }}
-                        onClick={() => {
-                          const ep = anime.episodes.find(e => e.epNumber === src.episodeNum) || anime.episodes[0] || {
-                            id: 1,
-                            epNumber: 1,
-                            title: 'Episode 01',
-                            airDate: '2026-01-01',
-                            durationMinutes: 24
-                          };
-                          addDownloadTask(anime, ep, src);
-                        }}
-                      >
-                        <Download size={14} />
-                        <span>Download Cache</span>
-                      </button>
-
-                      <button
-                        className="section-btn"
-                        style={{ background: 'var(--md-sys-color-primary)', color: 'var(--md-sys-color-on-primary)', borderColor: 'var(--md-sys-color-primary)', padding: '8px 14px' }}
+                        style={{ background: 'var(--md-sys-color-primary)', color: 'var(--md-sys-color-on-primary)', borderColor: 'var(--md-sys-color-primary)', padding: '8px 16px', fontWeight: 700 }}
                         onClick={async () => {
+                          const uri = sourceService.getSourceUri(src);
+                          if (!uri) {
+                            showToast('No valid magnet link or .torrent URL found for this release', 'error');
+                            return;
+                          }
                           try {
                             showToast(`Connecting to BT swarm for "${anime.title}"...`, 'info');
-                            const streamRes = await rqbitService.addTorrentAndGetStream(src.magnetLink, anime.title);
+                            const streamRes = await rqbitService.addTorrentAndGetStream(uri, anime.title);
                             onClose();
                             openPlayer(anime, anime.episodes[0], streamRes.stream_url, src.title);
                           } catch (err: any) {
@@ -532,9 +524,14 @@ export const AnimeDetailModal: React.FC<AnimeDetailModalProps> = ({ anime, onClo
                         className="section-btn"
                         style={{ padding: '8px 14px', background: 'rgba(255,255,255,0.08)' }}
                         onClick={async () => {
+                          const uri = sourceService.getSourceUri(src);
+                          if (!uri) {
+                            showToast('No valid magnet link or .torrent URL found for this release', 'error');
+                            return;
+                          }
                           try {
                             showToast(`Connecting & launching mpv for "${src.title}"...`, 'info');
-                            const streamRes = await rqbitService.addTorrentAndGetStream(src.magnetLink, anime.title);
+                            const streamRes = await rqbitService.addTorrentAndGetStream(uri, anime.title);
                             if (streamRes?.stream_url) {
                               await rqbitService.launchExternalMpv(streamRes.stream_url, anime.title);
                               showToast('Launched in mpv player!', 'success');
@@ -543,6 +540,7 @@ export const AnimeDetailModal: React.FC<AnimeDetailModalProps> = ({ anime, onClo
                             showToast(err.message || 'Failed to start mpv', 'error');
                           }
                         }}
+                        title="Play in external hardware-accelerated mpv"
                       >
                         <Play size={14} fill="currentColor" />
                         <span>mpv</span>

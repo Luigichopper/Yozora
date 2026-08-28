@@ -70,30 +70,10 @@ export interface TorrentSource {
   uploadedDate: string;
   magnetLink: string;
   torrentUrl?: string;
+  infoHash?: string;
   provider: 'Nyaa' | 'Mikan Project' | 'Anime Garden' | 'Tokyo Toshokan' | 'SubsPlease' | 'Erai-raws' | 'ACG.RIP';
   episodeNum?: number;
   isCached?: boolean;
-}
-
-export interface DownloadTask {
-  id: string;
-  animeId: string;
-  animeTitle: string;
-  episodeNum: number;
-  sourceTitle: string;
-  group: string;
-  resolution: string;
-  fileSize: string;
-  totalBytes: number;
-  downloadedBytes: number;
-  downloadSpeed: number; // KB/s
-  uploadSpeed: number;   // KB/s
-  progress: number;      // 0 - 100
-  status: 'downloading' | 'paused' | 'completed' | 'seeding';
-  peers: number;
-  etaSeconds: number;
-  addedAt: string;
-  videoUrl?: string;
 }
 
 export interface LibraryEntry {

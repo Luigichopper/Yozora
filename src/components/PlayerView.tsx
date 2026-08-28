@@ -21,6 +21,7 @@ import {
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { streamService, AnimeStreamSource } from '../services/streamService';
+import { sourceService } from '../services/sourceService';
 import { rqbitService } from '../services/rqbitService';
 import { torrentEngine } from '../services/torrentEngine';
 
@@ -43,7 +44,7 @@ export const PlayerView: React.FC = () => {
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [isLoadingStream, setIsLoadingStream] = useState<boolean>(false);
   const [currentTime, setCurrentTime] = useState<number>(0);
-  const [duration, setDuration] = useState<number>(1440);
+  const [duration, setDuration] = useState<number>(0);
   const [bufferedTime, setBufferedTime] = useState<number>(0);
   const [volume, setVolume] = useState<number>(0.8);
   const [isMuted, setIsMuted] = useState<boolean>(false);
@@ -54,7 +55,7 @@ export const PlayerView: React.FC = () => {
   const [customStreamUrl, setCustomStreamUrl] = useState<string>('');
   const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
   const [needsUserClickToStart, setNeedsUserClickToStart] = useState<boolean>(false);
-  const [autoSkipOp, setAutoSkipOp] = useState<boolean>(true);
+  const [autoSkipOp, setAutoSkipOp] = useState<boolean>(false);
   const [hasVideoError, setHasVideoError] = useState<boolean>(false);
 
   // Seekbar scrubbing preview state
@@ -63,11 +64,11 @@ export const PlayerView: React.FC = () => {
 
   // Live Playback Telemetry
   const [telemetry, setTelemetry] = useState({
-    videoWidth: 1920,
-    videoHeight: 1080,
-    fps: 60,
+    videoWidth: 0,
+    videoHeight: 0,
+    fps: 0,
     droppedFrames: 0,
-    bitrateKbps: 8420,
+    bitrateKbps: 0,
     bufferPercent: 0
   });
 
@@ -113,22 +114,25 @@ export const PlayerView: React.FC = () => {
 
             if (activeUrl && activeUrl.trim()) {
               setCurrentVideoSrc(activeUrl);
-            } else if (top.torrentSource?.magnetLink) {
-              // Try rqbit daemon streaming first
-              try {
-                const res = await rqbitService.addTorrentAndGetStream(top.torrentSource.magnetLink, playerState.anime.title);
-                if (res?.stream_url) {
-                  activeUrl = res.stream_url;
-                  setCurrentVideoSrc(res.stream_url);
-                  showToast(`rqbit sequential streaming active on ${res.stream_url}`, 'success');
-                }
-              } catch (rqbitErr) {
-                // Fallback to WebTorrent
-                const video = videoRef.current;
-                if (video) {
-                  await torrentEngine.streamToVideoElement(top.torrentSource.magnetLink, video);
-                  setIsPlaying(true);
-                  showToast('Streaming via in-browser WebTorrent swarm', 'info');
+            } else if (top.torrentSource) {
+              const uri = sourceService.getSourceUri(top.torrentSource);
+              if (uri) {
+                // Try rqbit daemon streaming first
+                try {
+                  const res = await rqbitService.addTorrentAndGetStream(uri, playerState.anime.title);
+                  if (res?.stream_url) {
+                    activeUrl = res.stream_url;
+                    setCurrentVideoSrc(res.stream_url);
+                    showToast('Sequential BitTorrent streaming active', 'success');
+                  }
+                } catch (rqbitErr) {
+                  // Fallback to WebTorrent
+                  const video = videoRef.current;
+                  if (video) {
+                    await torrentEngine.streamToVideoElement(uri, video);
+                    setIsPlaying(true);
+                    showToast('Streaming via in-browser WebTorrent swarm', 'info');
+                  }
                 }
               }
             }
@@ -142,7 +146,7 @@ export const PlayerView: React.FC = () => {
               }
             }
           } else {
-            showToast('No stream sources found for this title. Try adding a custom magnet in Cache Manager.', 'warning');
+            showToast('No stream sources found for this title. Try loading a custom URL or checking RSS providers in Settings.', 'warning');
           }
         } catch (err) {
           console.warn('[Player] Stream resolution error:', err);
@@ -211,9 +215,9 @@ export const PlayerView: React.FC = () => {
       setBufferedTime(bufEnd);
     }
 
-    // Auto Skip Opening
-    if (autoSkipOp && playerState?.episode.opSkipEnd) {
-      const start = playerState.episode.opSkipStart || 90;
+    // Auto Skip Opening (only if valid op timestamps exist and not a movie)
+    if (autoSkipOp && playerState?.episode.opSkipStart && playerState?.episode.opSkipEnd && playerState?.anime.type !== 'Movie') {
+      const start = playerState.episode.opSkipStart;
       const end = playerState.episode.opSkipEnd;
       if (cur >= start && cur < end && !lastOpSkipTriggerRef.current) {
         lastOpSkipTriggerRef.current = true;
@@ -228,11 +232,11 @@ export const PlayerView: React.FC = () => {
   const handleLoadedMetadata = () => {
     const video = videoRef.current;
     if (!video) return;
-    setDuration(video.duration || 1440);
+    setDuration(video.duration || 0);
     setTelemetry(prev => ({
       ...prev,
-      videoWidth: video.videoWidth || 1920,
-      videoHeight: video.videoHeight || 1080
+      videoWidth: video.videoWidth || 0,
+      videoHeight: video.videoHeight || 0
     }));
   };
 
@@ -249,24 +253,29 @@ export const PlayerView: React.FC = () => {
       setCurrentVideoSrc(mirror.url);
       setHasVideoError(false);
       showToast(`Switched to stream: ${mirror.server}`, 'info');
-    } else if (mirror.torrentSource?.magnetLink) {
-      showToast(`Connecting to BitTorrent stream for ${mirror.server}...`, 'info');
-      try {
-        const res = await rqbitService.addTorrentAndGetStream(mirror.torrentSource.magnetLink, playerState?.anime.title || 'Anime');
-        if (res?.stream_url) {
-          setCurrentVideoSrc(res.stream_url);
-          setHasVideoError(false);
-          showToast(`rqbit streaming active on ${res.stream_url}`, 'success');
-          return;
+    } else if (mirror.torrentSource) {
+      const uri = sourceService.getSourceUri(mirror.torrentSource);
+      if (uri) {
+        showToast(`Connecting to BitTorrent stream for ${mirror.server}...`, 'info');
+        try {
+          const res = await rqbitService.addTorrentAndGetStream(uri, playerState?.anime.title || 'Anime');
+          if (res?.stream_url) {
+            setCurrentVideoSrc(res.stream_url);
+            setHasVideoError(false);
+            showToast('Sequential BitTorrent streaming active', 'success');
+            return;
+          }
+        } catch (e) {
+          const video = videoRef.current;
+          if (video) {
+            await torrentEngine.streamToVideoElement(uri, video);
+            setIsPlaying(true);
+            setHasVideoError(false);
+            showToast('Streaming via in-browser WebTorrent swarm', 'info');
+          }
         }
-      } catch (e) {
-        const video = videoRef.current;
-        if (video) {
-          await torrentEngine.streamToVideoElement(mirror.torrentSource.magnetLink, video);
-          setIsPlaying(true);
-          setHasVideoError(false);
-          showToast('Streaming via in-browser WebTorrent swarm', 'info');
-        }
+      } else {
+        showToast('No valid stream target found for this mirror', 'warning');
       }
     }
   };
@@ -648,13 +657,17 @@ export const PlayerView: React.FC = () => {
               className="section-btn"
               onClick={async () => {
                 const target = currentVideoSrc || (streamMirrors.length > 0 ? streamMirrors[0].url : '');
+                const topTorrentUri = streamMirrors.length > 0 && streamMirrors[0].torrentSource
+                  ? sourceService.getSourceUri(streamMirrors[0].torrentSource)
+                  : '';
+
                 if (target) {
                   showToast(`Launching mpv for "${playerState.anime.title}"...`, 'info');
                   await rqbitService.launchExternalMpv(target, playerState.anime.title);
-                } else if (streamMirrors.length > 0 && streamMirrors[0].torrentSource?.magnetLink) {
+                } else if (topTorrentUri) {
                   showToast(`Connecting to rqbit & launching mpv...`, 'info');
                   try {
-                    const res = await rqbitService.addTorrentAndGetStream(streamMirrors[0].torrentSource.magnetLink, playerState.anime.title);
+                    const res = await rqbitService.addTorrentAndGetStream(topTorrentUri, playerState.anime.title);
                     if (res?.stream_url) {
                       await rqbitService.launchExternalMpv(res.stream_url, playerState.anime.title);
                     }
@@ -701,7 +714,9 @@ export const PlayerView: React.FC = () => {
           </div>
           <div className="stats-row">
             <span className="stats-key">Source Title:</span>
-            <span className="stats-val" title={playerState.sourceTitle}>{playerState.sourceTitle?.slice(0, 34)}...</span>
+            <span className="stats-val" title={playerState.sourceTitle}>
+              {playerState.sourceTitle && playerState.sourceTitle.length > 34 ? `${playerState.sourceTitle.slice(0, 34)}...` : (playerState.sourceTitle || 'Direct Stream')}
+            </span>
           </div>
           <div className="stats-row">
             <span className="stats-key">Dimensions:</span>
@@ -797,13 +812,17 @@ export const PlayerView: React.FC = () => {
             style={{ padding: '6px 14px', fontSize: '12px', background: 'var(--md-sys-color-primary)', color: 'var(--md-sys-color-on-primary)', borderColor: 'var(--md-sys-color-primary)', fontWeight: 700 }}
             onClick={async () => {
               const streamTarget = currentVideoSrc || (streamMirrors.length > 0 ? streamMirrors[0].url : '');
+              const topTorrentUri = streamMirrors.length > 0 && streamMirrors[0].torrentSource
+                ? sourceService.getSourceUri(streamMirrors[0].torrentSource)
+                : '';
+
               if (streamTarget) {
                 showToast(`Launching mpv for "${playerState.anime.title}"...`, 'info');
                 await rqbitService.launchExternalMpv(streamTarget, playerState.anime.title);
-              } else if (streamMirrors.length > 0 && streamMirrors[0].torrentSource?.magnetLink) {
+              } else if (topTorrentUri) {
                 showToast(`Connecting to rqbit & launching mpv...`, 'info');
                 try {
-                  const res = await rqbitService.addTorrentAndGetStream(streamMirrors[0].torrentSource.magnetLink, playerState.anime.title);
+                  const res = await rqbitService.addTorrentAndGetStream(topTorrentUri, playerState.anime.title);
                   if (res?.stream_url) {
                     await rqbitService.launchExternalMpv(res.stream_url, playerState.anime.title);
                   }

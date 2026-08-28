@@ -21,17 +21,31 @@ export const LibraryView: React.FC = () => {
   const [scoreInput, setScoreInput] = useState<number>(8.5);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-  // Load full anime details for library items from anidbService
+  // Load full anime details for library items from anidbService concurrently
   useEffect(() => {
+    let isMounted = true;
     async function loadLibraryAnime() {
-      const map: Record<string, AnimeItem> = {};
-      for (const id of Object.keys(library)) {
-        const item = await anidbService.getAnimeById(id);
-        if (item) map[id] = item;
+      const keys = Object.keys(library);
+      if (keys.length === 0) {
+        if (isMounted) setAnimeMap({});
+        return;
       }
-      setAnimeMap(map);
+      const results = await Promise.all(
+        keys.map(async (id) => {
+          const item = await anidbService.getAnimeById(id);
+          return { id, item };
+        })
+      );
+      if (isMounted) {
+        const map: Record<string, AnimeItem> = {};
+        for (const { id, item } of results) {
+          if (item) map[id] = item;
+        }
+        setAnimeMap(map);
+      }
     }
     loadLibraryAnime();
+    return () => { isMounted = false; };
   }, [library]);
 
   const entries = Object.values(library).map(entry => {
@@ -345,11 +359,11 @@ export const LibraryView: React.FC = () => {
                     className="poster-overlay-play"
                     style={{ position: 'static', width: '36px', height: '36px' }}
                     onClick={() => {
-                      const nextEpNum = Math.min(entry.totalEpisodes, entry.currentEpisode);
-                      const ep = anime.episodes.find(e => e.epNumber === nextEpNum) || anime.episodes[0];
+                      const targetEpNum = entry.currentEpisode < entry.totalEpisodes ? entry.currentEpisode + 1 : entry.currentEpisode;
+                      const ep = anime.episodes.find(e => e.epNumber === targetEpNum) || anime.episodes[0];
                       openPlayer(anime, ep);
                     }}
-                    title={`Resume Ep ${entry.currentEpisode}`}
+                    title={entry.currentEpisode < entry.totalEpisodes ? `Play Next (Ep ${entry.currentEpisode + 1})` : `Replay Ep ${entry.currentEpisode}`}
                   >
                     <Play size={16} fill="currentColor" />
                   </button>

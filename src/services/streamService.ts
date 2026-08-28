@@ -25,41 +25,46 @@ class StreamService {
   ): Promise<AnimeStreamSource[]> {
     const streamSources: AnimeStreamSource[] = [];
 
-    // 1. Try Consumet multi-provider stream resolver (HLS / MP4 direct streams)
-    try {
-      const searchTitle = romajiTitle || animeTitle;
-      const searchResults = await activeProvider.search(searchTitle);
-      if (searchResults.length > 0) {
-        const bestMatch = searchResults[0];
-        const episodes = await activeProvider.fetchEpisodes(bestMatch.id);
-        const targetEp = episodes.find(e => e.number === episodeNum) || episodes[episodeNum - 1] || episodes[0];
-        
-        if (targetEp) {
-          const streamData = await activeProvider.fetchSources(targetEp.id);
-          for (const source of streamData.sources) {
-            streamSources.push({
-              url: source.url,
-              isHls: source.isM3U8 || source.url.includes('.m3u8'),
-              quality: source.quality || 'Auto',
-              server: `[Direct CDN] ${bestMatch.title} - EP ${targetEp.number}`
-            });
+    // Run both Direct CDN / Consumet resolution and BitTorrent RSS swarm discovery concurrently
+    const [consumetRes, bittorrentRes] = await Promise.allSettled([
+      // 1. Direct CDN / Provider scraper (fast timeout)
+      (async () => {
+        const searchTitle = romajiTitle || animeTitle;
+        const searchResults = await activeProvider.search(searchTitle);
+        if (searchResults.length > 0) {
+          const bestMatch = searchResults[0];
+          const episodes = await activeProvider.fetchEpisodes(bestMatch.id);
+          const targetEp = episodes.find(e => e.number === episodeNum) || episodes[episodeNum - 1] || episodes[0];
+          
+          if (targetEp) {
+            const streamData = await activeProvider.fetchSources(targetEp.id);
+            const results: AnimeStreamSource[] = [];
+            for (const source of streamData.sources) {
+              results.push({
+                url: source.url,
+                isHls: source.isM3U8 || source.url.includes('.m3u8'),
+                quality: source.quality || 'Auto',
+                server: `[Direct CDN] ${bestMatch.title} - EP ${targetEp.number}`
+              });
+            }
+            return results;
           }
         }
-      }
-    } catch (err) {
-      console.warn('[StreamService] Provider stream resolution fallback:', err);
-    }
+        return [];
+      })(),
 
-    // 2. Fetch real BitTorrent sources from RSS indexers (Nyaa, SubsPlease, Anime Garden, Mikan)
-    try {
-      const sources = await sourceService.getSourcesForAnime(animeId || animeTitle, animeTitle, romajiTitle);
-      if (sources && sources.length > 0) {
+      // 2. Fetch real BitTorrent sources from RSS indexers (Nyaa, SubsPlease, Anime Garden, Mikan)
+      (async () => {
+        const sources = await sourceService.getSourcesForAnime(animeId || animeTitle, animeTitle, romajiTitle);
+        if (!sources || sources.length === 0) return [];
+
         const epSources = sources.filter(s => s.episodeNum === episodeNum || !s.episodeNum);
         const targetSources = epSources.length > 0 ? epSources : sources;
+        const results: AnimeStreamSource[] = [];
 
         for (let i = 0; i < Math.min(targetSources.length, 10); i++) {
           const src = targetSources[i];
-          streamSources.push({
+          results.push({
             url: '',
             isHls: false,
             quality: `${src.resolution} (${src.codec})`,
@@ -68,31 +73,37 @@ class StreamService {
           });
         }
 
-        // Only register the #1 top-ranked source with rqbit for immediate streaming
-        if (streamSources.length > 0 && streamSources[0].torrentSource) {
-          try {
-            const topRes = await rqbitService.addTorrentAndGetStream(
-              streamSources[0].torrentSource.magnetLink,
-              animeTitle
-            );
-            if (topRes?.stream_url) {
-              streamSources[0].url = topRes.stream_url;
-              streamSources[0].torrentId = topRes.torrent_id;
+        // Register the #1 top-ranked release with rqbit for immediate streaming
+        if (results.length > 0 && results[0].torrentSource) {
+          const topUri = sourceService.getSourceUri(results[0].torrentSource);
+          if (topUri) {
+            try {
+              const topRes = await rqbitService.addTorrentAndGetStream(topUri, animeTitle);
+              if (topRes?.stream_url) {
+                results[0].url = topRes.stream_url;
+                results[0].torrentId = topRes.torrent_id;
+              }
+            } catch (e) {
+              // Non-fatal; PlayerView will fallback to WebTorrent
             }
-          } catch (e) {
-            // Non-fatal; PlayerView will fallback to WebTorrent
           }
         }
-      }
-    } catch (err) {
-      console.warn('[StreamService] BitTorrent stream resolution fallback:', err);
+        return results;
+      })()
+    ]);
+
+    if (consumetRes.status === 'fulfilled' && consumetRes.value.length > 0) {
+      streamSources.push(...consumetRes.value);
+    }
+    if (bittorrentRes.status === 'fulfilled' && bittorrentRes.value.length > 0) {
+      streamSources.push(...bittorrentRes.value);
     }
 
     return streamSources;
   }
 
   /**
-   * Universal playback handler: Starts sequential stream if magnet and optionally spawns hardware-accelerated MPV
+   * Universal playback handler: Starts sequential stream if magnet/torrent and optionally spawns hardware-accelerated MPV
    */
   public async playAnimeStream(
     magnetOrUrl: string,
@@ -101,15 +112,15 @@ class StreamService {
   ): Promise<{ streamUrl: string; launchedMpv: boolean }> {
     let resolvedStreamUrl = magnetOrUrl;
 
-    // 1. If input is a magnet link, start sequential download in rqbit backend
-    if (magnetOrUrl.startsWith('magnet:?')) {
+    // 1. If input is a magnet link or .torrent URL, start sequential download in rqbit backend
+    if (magnetOrUrl.startsWith('magnet:?') || magnetOrUrl.endsWith('.torrent') || magnetOrUrl.includes('/download/')) {
       try {
         const res = await rqbitService.addTorrentAndGetStream(magnetOrUrl, title);
         if (res && res.stream_url) {
           resolvedStreamUrl = res.stream_url;
         }
       } catch (err) {
-        console.warn('[StreamService] Failed to start rqbit stream for magnet:', err);
+        console.warn('[StreamService] Failed to start rqbit stream for torrent:', err);
         throw err;
       }
     }

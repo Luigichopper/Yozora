@@ -18,9 +18,7 @@ export interface SwarmStats {
 
 const PUBLIC_WEBRTC_TRACKERS = [
   'wss://tracker.openwebtorrent.com',
-  'wss://tracker.btorrent.xyz',
   'wss://tracker.webtorrent.dev',
-  'wss://tracker.fastcast.nz',
   'wss://tracker.files.fm:7073/announce'
 ];
 
@@ -64,15 +62,19 @@ class TorrentEngine {
   }
 
   /**
-   * Add a magnet URI to the live BitTorrent transfer engine
+   * Add a magnet URI or .torrent URL to the live BitTorrent transfer engine
    */
   public async addTorrent(
-    magnetUri: string,
+    magnetUriOrUrl: string,
     onProgress?: (stats: SwarmStats) => void,
     taskId?: string
   ): Promise<{ infoHash: string; name: string; streamUrl?: string }> {
     const client = this.getClient();
-    const preparedMagnet = this.prepareMagnetUri(magnetUri);
+    const payload = (magnetUriOrUrl || '').trim();
+    if (!payload) {
+      throw new Error('No valid magnet link or .torrent URL provided');
+    }
+    const preparedMagnet = this.prepareMagnetUri(payload);
 
     return new Promise((resolve, reject) => {
       try {
@@ -96,6 +98,8 @@ class TorrentEngine {
           return;
         }
 
+        let isResolved = false;
+
         const torrent = client.add(preparedMagnet, {
           announce: PUBLIC_WEBRTC_TRACKERS
         });
@@ -112,6 +116,8 @@ class TorrentEngine {
         this.setupTorrentEvents(torrent, onProgress);
 
         torrent.on('ready', () => {
+          if (isResolved) return;
+          isResolved = true;
           // Find largest video file (MKV / MP4 / WebM)
           const videoFile = torrent.files.reduce((prev: any, curr: any) => {
             return (curr.length > (prev?.length || 0)) ? curr : prev;
@@ -135,16 +141,11 @@ class TorrentEngine {
 
         torrent.on('error', (err: any) => {
           console.warn('Torrent download error:', err);
-          reject(err);
+          if (!isResolved) {
+            isResolved = true;
+            reject(err);
+          }
         });
-
-        // Timeout fallback after 4s to avoid blocking UI if metadata resolution takes longer
-        setTimeout(() => {
-          resolve({
-            infoHash: torrent.infoHash,
-            name: torrent.name || 'Connecting to BitTorrent swarm...'
-          });
-        }, 4000);
       } catch (err) {
         reject(err);
       }
@@ -158,7 +159,7 @@ class TorrentEngine {
         name: torrent.name || 'Anime Stream',
         progress: Math.round((torrent.progress || 0) * 100),
         downloaded: torrent.downloaded || 0,
-        length: torrent.length || 1400000000,
+        length: torrent.length || 0,
         downloadSpeed: torrent.downloadSpeed || 0,
         uploadSpeed: torrent.uploadSpeed || 0,
         numPeers: torrent.numPeers || 0,
@@ -179,9 +180,13 @@ class TorrentEngine {
   /**
    * Stream a torrent directly to a <video> element
    */
-  public async streamToVideoElement(magnetUri: string, videoElement: HTMLVideoElement): Promise<void> {
+  public async streamToVideoElement(magnetUriOrUrl: string, videoElement: HTMLVideoElement): Promise<void> {
     const client = this.getClient();
-    const preparedMagnet = this.prepareMagnetUri(magnetUri);
+    const payload = (magnetUriOrUrl || '').trim();
+    if (!payload) {
+      throw new Error('No valid magnet link or .torrent URL provided');
+    }
+    const preparedMagnet = this.prepareMagnetUri(payload);
 
     return new Promise((resolve, reject) => {
       if (!client) {
@@ -189,12 +194,13 @@ class TorrentEngine {
         return;
       }
 
-      client.add(preparedMagnet, { announce: PUBLIC_WEBRTC_TRACKERS }, (torrent: any) => {
-        const videoFile = torrent.files.find((f: any) => 
-          f.name.endsWith('.mp4') || 
-          f.name.endsWith('.mkv') || 
-          f.name.endsWith('.webm')
-        ) || torrent.files[0];
+      const renderTorrent = (torrent: any) => {
+        const isVideo = (name: string) => /\.(mp4|mkv|webm|avi|ts)$/i.test(name);
+        const videoFiles = torrent.files.filter((f: any) => isVideo(f.name || ''));
+        const pool = videoFiles.length > 0 ? videoFiles : torrent.files;
+        const videoFile = pool.reduce((prev: any, curr: any) => {
+          return (curr.length > (prev?.length || 0)) ? curr : prev;
+        }, pool[0]);
 
         if (videoFile) {
           videoFile.renderTo(videoElement, {
@@ -211,6 +217,20 @@ class TorrentEngine {
         } else {
           reject(new Error('No playable video stream found in torrent'));
         }
+      };
+
+      const existing = client.get(preparedMagnet);
+      if (existing) {
+        if (existing.files && existing.files.length > 0) {
+          renderTorrent(existing);
+        } else {
+          existing.once('ready', () => renderTorrent(existing));
+        }
+        return;
+      }
+
+      client.add(preparedMagnet, { announce: PUBLIC_WEBRTC_TRACKERS }, (torrent: any) => {
+        renderTorrent(torrent);
       });
     });
   }

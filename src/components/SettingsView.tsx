@@ -3,7 +3,6 @@ import { Sparkles, Terminal, Shield, Rss, Palette, Check, RefreshCw, Copy, Exter
 import { useApp } from '../context/AppContext';
 import { MATUGEN_PALETTES } from '../theme/matugen';
 import { sourceService, RSSFeedProvider } from '../services/sourceService';
-import { anidbService } from '../services/anidbService';
 import { matugenService } from '../services/matugenService';
 import { rqbitService, RqbitStatus } from '../services/rqbitService';
 import { anilistService } from '../services/tracking/anilist';
@@ -15,8 +14,6 @@ export const SettingsView: React.FC = () => {
   const [providers, setProviders] = useState<RSSFeedProvider[]>([]);
   const [customRssUrl, setCustomRssUrl] = useState('');
   const [customRssName, setCustomRssName] = useState('');
-  const [anidbClientName, setAnidbClientName] = useState('yozora_desktop');
-  const [anidbClientVer, setAnidbClientVer] = useState('1');
   const [anilistToken, setAnilistToken] = useState(anilistService.getToken() || '');
   const [matugenJsonInput, setMatugenJsonInput] = useState('');
   const [showJsonDialog, setShowJsonDialog] = useState(false);
@@ -25,24 +22,39 @@ export const SettingsView: React.FC = () => {
   const [useExternalMpv, setUseExternalMpv] = useState(false);
   const wallpaperInputRef = useRef<HTMLInputElement | null>(null);
 
-  // Load active providers, AniDB credentials, and rqbit daemon status
+  const [anilistApiOnline, setAnilistApiOnline] = useState<boolean>(true);
+
+  // Load active providers, AniList token, and rqbit daemon status on mount
   useEffect(() => {
     async function loadData() {
       const p = await sourceService.getProviders();
       setProviders(p);
-      const creds = anidbService.getCredentials();
-      setAnidbClientName(creds.clientName);
-      setAnidbClientVer(creds.clientVersion);
       setAnilistToken(anilistService.getToken() || '');
 
       const savedMpvPref = await db.getSetting<boolean>('use_external_mpv', false);
       setUseExternalMpv(savedMpvPref);
 
-      const rStatus = await rqbitService.checkStatus(`127.0.0.1:${rqbitListenPort}`);
+      const savedPort = await db.getSetting<string>('rqbit_port', '3030');
+      setRqbitListenPort(savedPort);
+
+      const rStatus = await rqbitService.checkStatus(`127.0.0.1:${savedPort}`);
       setRqbitStatus(rStatus);
+
+      // Measure real AniList GraphQL connectivity
+      try {
+        const res = await fetch('https://graphql.anilist.co', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ query: '{ Page(page: 1, perPage: 1) { media { id } } }' }),
+          signal: AbortSignal.timeout(3000)
+        });
+        setAnilistApiOnline(res.ok);
+      } catch {
+        setAnilistApiOnline(false);
+      }
     }
     loadData();
-  }, [rqbitListenPort]);
+  }, []);
 
   const handleToggleExternalMpv = async () => {
     const nextVal = !useExternalMpv;
@@ -68,6 +80,7 @@ export const SettingsView: React.FC = () => {
   };
 
   const handleStartRqbit = async () => {
+    await db.saveSetting('rqbit_port', rqbitListenPort);
     showToast('Starting rqbit background daemon on port ' + rqbitListenPort + '...', 'info');
     try {
       const res = await rqbitService.startServer(`127.0.0.1:${rqbitListenPort}`);
@@ -112,15 +125,6 @@ windowrulev2 = idleinhibit focus, class:^(yozora)$`;
     setCustomRssUrl('');
     setCustomRssName('');
     showToast(`Added RSS Feed: ${name}`, 'success');
-  };
-
-  const handleSaveAniDBCreds = async (e: React.FormEvent) => {
-    e.preventDefault();
-    await anidbService.setCredentials({
-      clientName: anidbClientName.trim() || 'yozora_desktop',
-      clientVersion: anidbClientVer.trim() || '1'
-    });
-    showToast('Saved AniDB Client API registration credentials!', 'success');
   };
 
   // Extract palette from uploaded desktop wallpaper
@@ -366,74 +370,24 @@ windowrulev2 = idleinhibit focus, class:^(yozora)$`;
         </form>
       </div>
 
-      {/* 4. Anime Metadata Provider (AniList GraphQL + AniDB ID Space) */}
-      <div style={{ background: 'var(--md-sys-color-surface-container)', border: '1px solid var(--md-sys-color-outline-variant)', borderRadius: '24px', padding: '24px' }}>
+      {/* 4. AniList GraphQL Metadata & Account Watch Sync */}
+      <div style={{ background: 'var(--md-sys-color-surface-container)', border: '1px solid var(--md-sys-color-outline-variant)', borderRadius: '24px', padding: '24px', marginTop: '24px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '8px' }}>
-          <Shield size={20} color="#ff9800" />
+          <Shield size={20} color="#02a9ff" />
           <h2 style={{ fontSize: '17px', fontWeight: 700, color: '#fff' }}>
-            Anime Metadata Provider (AniList GraphQL & AniDB Mapping)
+            AniList GraphQL Metadata & Cover Service
           </h2>
         </div>
         <p style={{ fontSize: '13px', color: 'var(--md-sys-color-on-surface-variant)', marginBottom: '16px' }}>
-          Live metadata queries, seasonal airing schedules, and cover imagery are fetched via the public <strong>AniList GraphQL API</strong> with canonical <strong>AniDB ID</strong> space mapping and local 7-day TTL caching.
+          Live anime metadata, cover posters, banners, streaming episodes, and seasonal airing schedules are queried directly via the public <strong>AniList GraphQL API</strong> with local 7-day TTL caching.
         </p>
 
-        <form onSubmit={handleSaveAniDBCreds}>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px', marginBottom: '14px' }}>
-            <div>
-              <label style={{ fontSize: '12px', color: 'var(--md-sys-color-on-surface-variant)', display: 'block', marginBottom: '4px' }}>
-                AniDB Client Registration Name
-              </label>
-              <input
-                type="text"
-                value={anidbClientName}
-                onChange={(e) => setAnidbClientName(e.target.value)}
-                style={{
-                  width: '100%',
-                  background: 'var(--md-sys-color-surface-container-high)',
-                  border: '1px solid var(--md-sys-color-outline-variant)',
-                  borderRadius: '12px',
-                  padding: '8px 12px',
-                  color: '#fff',
-                  fontSize: '13px'
-                }}
-              />
-            </div>
-
-            <div>
-              <label style={{ fontSize: '12px', color: 'var(--md-sys-color-on-surface-variant)', display: 'block', marginBottom: '4px' }}>
-                Client Version Number
-              </label>
-              <input
-                type="text"
-                value={anidbClientVer}
-                onChange={(e) => setAnidbClientVer(e.target.value)}
-                style={{
-                  width: '100%',
-                  background: 'var(--md-sys-color-surface-container-high)',
-                  border: '1px solid var(--md-sys-color-outline-variant)',
-                  borderRadius: '12px',
-                  padding: '8px 12px',
-                  color: '#fff',
-                  fontSize: '13px'
-                }}
-              />
-            </div>
-          </div>
-
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#4caf50' }} />
-              <span style={{ fontSize: '12px', color: '#4caf50', fontWeight: 600 }}>
-                Metadata Rate Limit: 1.2s Queue / Cache TTL: 7 Days
-              </span>
-            </div>
-
-            <button type="submit" className="section-btn" style={{ padding: '6px 16px' }}>
-              Save Settings
-            </button>
-          </div>
-        </form>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: anilistApiOnline ? '#4caf50' : '#f44336' }} />
+          <span style={{ fontSize: '12px', color: anilistApiOnline ? '#4caf50' : '#f44336', fontWeight: 600 }}>
+            {anilistApiOnline ? 'AniList GraphQL Engine Active • 800ms Rate Limit Protection' : 'AniList GraphQL Offline / Unreachable'}
+          </span>
+        </div>
       </div>
 
       {/* 4b. AniList Account Watch Progress Sync */}
@@ -568,7 +522,7 @@ windowrulev2 = idleinhibit focus, class:^(yozora)$`;
           />
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: '16px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginTop: '16px' }}>
           <button
             type="button"
             className="section-btn"
@@ -579,7 +533,22 @@ windowrulev2 = idleinhibit focus, class:^(yozora)$`;
             <span>{rqbitStatus.running ? 'Restart rqbit Daemon' : 'Start rqbit Daemon'}</span>
           </button>
 
-          <div style={{ fontSize: '11px', color: 'var(--md-sys-color-on-surface-variant)', fontFamily: 'var(--font-mono)' }}>
+          {rqbitStatus.running && (
+            <button
+              type="button"
+              className="section-btn"
+              onClick={async () => {
+                await rqbitService.stopServer();
+                setRqbitStatus({ running: false, listen_addr: `127.0.0.1:${rqbitListenPort}` });
+                showToast('Stopped rqbit daemon.', 'info');
+              }}
+              style={{ background: 'var(--md-sys-color-surface-container-high)', color: '#ff5252', padding: '8px 18px' }}
+            >
+              <span>Stop Daemon</span>
+            </button>
+          )}
+
+          <div style={{ fontSize: '11px', color: 'var(--md-sys-color-on-surface-variant)', fontFamily: 'var(--font-mono)', marginLeft: 'auto' }}>
             Endpoint: http://127.0.0.1:{rqbitListenPort}/torrents/&#123;id&#125;/stream/0
           </div>
         </div>

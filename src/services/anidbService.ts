@@ -1,40 +1,13 @@
 import { AnimeItem, Episode, AnimeRelation } from '../types/anime';
 import { db } from './db';
 
-interface AniDBCredentials {
-  clientName: string;
-  clientVersion: string;
-}
-
 const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days TTL per spec
 
 const DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'] as const;
 
-class AniDBService {
+class AniListMetadataService {
   private lastRequestTime = 0;
-  private minIntervalMs = 1200; // Rate-limit queue
-  private credentials: AniDBCredentials = {
-    clientName: 'yozora_desktop',
-    clientVersion: '1'
-  };
-
-  constructor() {
-    this.initCredentials();
-  }
-
-  private async initCredentials() {
-    const creds = await db.getSetting<AniDBCredentials>('anidb_credentials', this.credentials);
-    this.credentials = creds;
-  }
-
-  public async setCredentials(creds: AniDBCredentials): Promise<void> {
-    this.credentials = creds;
-    await db.saveSetting('anidb_credentials', creds);
-  }
-
-  public getCredentials(): AniDBCredentials {
-    return this.credentials;
-  }
+  private minIntervalMs = 800; // Rate-limit queue for AniList GraphQL
 
   private async rateLimitDelay(): Promise<void> {
     const now = Date.now();
@@ -143,6 +116,12 @@ class AniDBService {
                   timeUntilAiring
                   episode
                 }
+                streamingEpisodes {
+                  title
+                  thumbnail
+                  url
+                  site
+                }
                 relations {
                   edges {
                     relationType
@@ -221,6 +200,12 @@ class AniDBService {
                 airingAt
                 timeUntilAiring
                 episode
+              }
+              streamingEpisodes {
+                title
+                thumbnail
+                url
+                site
               }
               relations {
                 edges {
@@ -328,6 +313,12 @@ class AniDBService {
               timeUntilAiring
               episode
             }
+            streamingEpisodes {
+              title
+              thumbnail
+              url
+              site
+            }
             relations {
               edges {
                 relationType
@@ -383,42 +374,75 @@ class AniDBService {
       airDateStart = `${y}-${mo}-${d}`;
     }
 
-    // Accurate episodes calculation
-    const totalEps = isMovie ? 1 : (m.episodes || (m.nextAiringEpisode ? Math.max(1, m.nextAiringEpisode.episode - 1) : 12));
-    const episodesCount = isMovie ? 1 : (m.episodes || (m.nextAiringEpisode ? Math.max(1, m.nextAiringEpisode.episode - 1) : 0));
+    // Accurate episodes calculation & streaming metadata
+    const streamingEps: any[] = m.streamingEpisodes || [];
+    let totalEps = 12;
+    if (isMovie) {
+      totalEps = 1;
+    } else if (m.episodes && m.episodes > 0) {
+      totalEps = m.episodes;
+    } else if (streamingEps.length > 0) {
+      totalEps = Math.max(streamingEps.length, m.nextAiringEpisode ? m.nextAiringEpisode.episode : 12);
+    } else if (m.nextAiringEpisode?.episode) {
+      // If airing, show at least 12 or next airing episode + standard buffer
+      totalEps = Math.max(12, m.nextAiringEpisode.episode);
+    } else if (isOVA) {
+      totalEps = 1;
+    } else {
+      totalEps = 12;
+    }
 
-    const episodes: Episode[] = Array.from({ length: totalEps }, (_, i) => ({
-      id: i + 1,
-      epNumber: i + 1,
-      title: isMovie ? 'Full Movie' : `Episode ${(i + 1).toString().padStart(2, '0')}`,
-      airDate: airDateStart,
-      durationMinutes: isMovie ? 110 : isOVA ? 45 : 24,
-      opSkipStart: isMovie ? undefined : 90,
-      opSkipEnd: isMovie ? undefined : 180,
-      edSkipStart: isMovie ? undefined : 1340,
-      edSkipEnd: isMovie ? undefined : 1430
-    }));
+    const episodesCount = isMovie ? 1 : (m.episodes || totalEps);
+
+    const episodes: Episode[] = Array.from({ length: totalEps }, (_, i) => {
+      const epNum = i + 1;
+      const streamInfo = streamingEps.find((s: any) => {
+        const match = s.title?.match(/Episode\s+(\d+)/i) || s.title?.match(/(\d+)/);
+        return match ? parseInt(match[1]) === epNum : false;
+      }) || streamingEps[i];
+
+      const epTitle = streamInfo?.title || (isMovie ? 'Full Movie' : `Episode ${epNum.toString().padStart(2, '0')}`);
+
+      let epAirDate = airDateStart;
+      if (m.startDate?.year && m.startDate?.month && m.startDate?.day) {
+        const startD = new Date(m.startDate.year, m.startDate.month - 1, m.startDate.day);
+        startD.setDate(startD.getDate() + (i * 7));
+        epAirDate = `${startD.getFullYear()}-${(startD.getMonth() + 1).toString().padStart(2, '0')}-${startD.getDate().toString().padStart(2, '0')}`;
+      }
+
+      return {
+        id: epNum,
+        epNumber: epNum,
+        title: epTitle,
+        airDate: epAirDate,
+        durationMinutes: isMovie ? 110 : isOVA ? 45 : 24,
+        opSkipStart: undefined,
+        opSkipEnd: undefined,
+        edSkipStart: undefined,
+        edSkipEnd: undefined
+      };
+    });
 
     const cleanSynopsis = (m.description || 'No synopsis available.').replace(/<[^>]*>?/gm, '');
 
     type BroadcastDay = 'Monday' | 'Tuesday' | 'Wednesday' | 'Thursday' | 'Friday' | 'Saturday' | 'Sunday';
+    const dayMap: Record<number, BroadcastDay> = {
+      0: 'Sunday',
+      1: 'Monday',
+      2: 'Tuesday',
+      3: 'Wednesday',
+      4: 'Thursday',
+      5: 'Friday',
+      6: 'Saturday'
+    };
+
     let broadcastDay: BroadcastDay = 'Saturday';
     if (m.nextAiringEpisode?.airingAt) {
       const date = new Date(m.nextAiringEpisode.airingAt * 1000);
-      const dayIndex = date.getUTCDay();
-      const dayMap: Record<number, BroadcastDay> = {
-        0: 'Sunday',
-        1: 'Monday',
-        2: 'Tuesday',
-        3: 'Wednesday',
-        4: 'Thursday',
-        5: 'Friday',
-        6: 'Saturday'
-      };
-      broadcastDay = dayMap[dayIndex] || 'Saturday';
-    } else {
-      const idx = (m.id || 0) % 7;
-      broadcastDay = DAYS[idx];
+      broadcastDay = dayMap[date.getUTCDay()] || 'Saturday';
+    } else if (m.startDate?.year && m.startDate?.month && m.startDate?.day) {
+      const date = new Date(m.startDate.year, m.startDate.month - 1, m.startDate.day);
+      broadcastDay = dayMap[date.getDay()] || 'Saturday';
     }
 
     // Relations mapping
@@ -491,4 +515,5 @@ class AniDBService {
   }
 }
 
-export const anidbService = new AniDBService();
+export const anilistMetaService = new AniListMetadataService();
+export const anidbService = anilistMetaService;

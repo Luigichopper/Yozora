@@ -22,11 +22,10 @@ export class ConsumetProvider implements AnimeProvider {
   async search(query: string): Promise<{ id: string; title: string; subOrDub: 'sub' | 'dub' }[]> {
     const baseUrl = this.getBaseUrl();
     const providers = ['gogoanime', 'zoro', 'animepahe'];
-    
     for (const provider of providers) {
       try {
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 3500);
+        const timeoutId = setTimeout(() => controller.abort(), 800);
         
         const res = await fetch(`${baseUrl}/${provider}/${encodeURIComponent(query)}`, {
           signal: controller.signal
@@ -43,7 +42,7 @@ export class ConsumetProvider implements AnimeProvider {
           }));
         }
       } catch (err) {
-        // Fail quietly on dead public endpoints
+        // Fail quietly on dead/offline public endpoints
       }
     }
     return [];

@@ -18,6 +18,14 @@ export const DEFAULT_RSS_PROVIDERS: RSSFeedProvider[] = [
   { id: 'acgrip', name: 'ACG.RIP Anime Index', url: 'https://acg.rip/feed', enabled: false, latencyMs: 175 }
 ];
 
+export const DEFAULT_ANIME_TRACKERS = [
+  'http://nyaa.tracker.wf:7777/announce',
+  'udp://open.stealth.si:80/announce',
+  'udp://tracker.opentrackr.org:1337/announce',
+  'udp://exodus.desync.com:6969/announce',
+  'udp://tracker.torrent.eu.org:451/announce'
+];
+
 class SourceService {
   private providers: RSSFeedProvider[] = DEFAULT_RSS_PROVIDERS;
 
@@ -53,6 +61,49 @@ class SourceService {
   }
 
   /**
+   * Validate whether a string is a 40-char hex (SHA-1) or 32-char Base32 BitTorrent info-hash
+   */
+  public isValidInfoHash(hash?: string | null): boolean {
+    if (!hash || typeof hash !== 'string') return false;
+    const clean = hash.trim();
+    return /^[a-f0-9]{40}$/i.test(clean) || /^[a-z2-7]{32}$/i.test(clean);
+  }
+
+  /**
+   * Validate whether a string is a well-formed magnet URI with a valid BTIH hash
+   */
+  public isValidMagnetUri(uri?: string | null): boolean {
+    if (!uri || typeof uri !== 'string' || !uri.startsWith('magnet:?')) return false;
+    const match = uri.match(/xt=urn:btih:([a-zA-Z0-9]+)/i);
+    return Boolean(match && this.isValidInfoHash(match[1]));
+  }
+
+  /**
+   * Check if a string is a valid HTTP(S) URL
+   */
+  public isValidUrl(url?: string | null): boolean {
+    if (!url || typeof url !== 'string') return false;
+    return url.startsWith('http://') || url.startsWith('https://');
+  }
+
+  /**
+   * Resolve best stream/download target for a TorrentSource (valid magnet > .torrent URL > http URL)
+   */
+  public getSourceUri(source?: TorrentSource | null): string {
+    if (!source) return '';
+    if (this.isValidMagnetUri(source.magnetLink)) {
+      return source.magnetLink;
+    }
+    if (this.isValidUrl(source.torrentUrl)) {
+      return source.torrentUrl!;
+    }
+    if (this.isValidUrl(source.magnetLink)) {
+      return source.magnetLink;
+    }
+    return '';
+  }
+
+  /**
    * Parse magnet link and extract info hash, name, and trackers
    */
   public parseMagnet(magnetUri: string): { infoHash: string; name: string; trackers: string[] } | null {
@@ -61,7 +112,9 @@ class SourceService {
     const params = new URLSearchParams(magnetUri.replace('magnet:?', ''));
     const xt = params.get('xt') || '';
     const infoHashMatch = xt.match(/urn:btih:([a-zA-Z0-9]+)/i);
-    const infoHash = infoHashMatch ? infoHashMatch[1] : '';
+    const infoHash = infoHashMatch && this.isValidInfoHash(infoHashMatch[1]) ? infoHashMatch[1].toLowerCase() : '';
+    if (!infoHash) return null;
+
     const name = params.get('dn') || 'Unknown Torrent';
     const trackers = params.getAll('tr');
 
@@ -97,40 +150,84 @@ class SourceService {
     if (/flac/i.test(title)) audio = 'FLAC 2.0';
     else if (/opus/i.test(title) || /5\.1/i.test(title)) audio = 'Opus 5.1';
 
-    const epMatch = title.match(/(?:-|\[|\s)(?:EP|E|episode|\s)?(\d{1,4})(?:v\d)?(?:\]|\s|\.|$)/i);
-    const episodeNum = epMatch ? parseInt(epMatch[1]) : undefined;
+    // Clean title of years, resolutions, and video tags before matching episode number
+    let cleanForEp = title
+      .replace(/\b(19\d\d|20\d\d)\b/g, ' ')
+      .replace(/\b(480p|720p|1080p|2160p|4k|uhd)\b/gi, ' ')
+      .replace(/\b(x264|x265|h264|h265|hevc|av1|10bit|8bit|aac|flac|opus)\b/gi, ' ')
+      .replace(/\[[^\]]*\]/g, ' ')
+      .replace(/\([^\)]*\)/g, ' ');
+
+    let episodeNum: number | undefined = undefined;
+    const epMatch = cleanForEp.match(/(?:-\s*|\b(?:EP|E|episode|ep|#)\s*)(\d{1,3})(?:v\d)?\b/i) ||
+      cleanForEp.match(/\s+(\d{1,3})(?:v\d)?(?:\s|$|\.)/);
+    if (epMatch) {
+      const parsed = parseInt(epMatch[1], 10);
+      if (!isNaN(parsed) && parsed > 0 && parsed <= 1200) {
+        episodeNum = parsed;
+      }
+    }
 
     return { group, resolution, codec, audio, episodeNum };
   }
 
   /**
-   * Fetch live RSS XML feed with CORS proxy failover
+   * Fetch live RSS XML feed with concurrent CORS proxy failover
    */
   public async fetchLiveRssXml(feedUrl: string): Promise<string | null> {
-    // 1. Direct fetch
-    try {
-      const res = await fetch(feedUrl, { signal: AbortSignal.timeout(3000) });
-      if (res.ok) return await res.text();
-    } catch {}
+    const fetchWithTimeout = async (url: string, ms = 3000): Promise<string> => {
+      const res = await fetch(url, { signal: AbortSignal.timeout(ms) });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return await res.text();
+    };
 
-    // 2. High-speed CORS proxy failovers
-    const proxies = [
-      `https://api.allorigins.win/raw?url=${encodeURIComponent(feedUrl)}`,
-      `https://corsproxy.io/?${encodeURIComponent(feedUrl)}`
+    const targets = [
+      feedUrl,
+      `https://corsproxy.io/?${encodeURIComponent(feedUrl)}`,
+      `https://api.allorigins.win/raw?url=${encodeURIComponent(feedUrl)}`
     ];
 
-    for (const pUrl of proxies) {
-      try {
-        const pRes = await fetch(pUrl, { signal: AbortSignal.timeout(3500) });
-        if (pRes.ok) return await pRes.text();
-      } catch {}
-    }
+    const results = await Promise.allSettled(
+      targets.map(url => fetchWithTimeout(url, 3500))
+    );
 
+    for (const r of results) {
+      if (r.status === 'fulfilled' && r.value && (r.value.includes('<rss') || r.value.includes('<item'))) {
+        return r.value;
+      }
+    }
+    for (const r of results) {
+      if (r.status === 'fulfilled' && r.value && r.value.trim().startsWith('<')) {
+        return r.value;
+      }
+    }
     return null;
   }
 
   /**
-   * Parse RSS XML into TorrentSource array with smart title keyword filtering
+   * Measure live latency for all enabled RSS providers
+   */
+  public async measureProviderLatencies(): Promise<RSSFeedProvider[]> {
+    const updated = await Promise.all(
+      this.providers.map(async (prov) => {
+        if (!prov.enabled) return prov;
+        const start = performance.now();
+        try {
+          const res = await fetch(prov.url, { method: 'HEAD', signal: AbortSignal.timeout(2000) });
+          const latency = Math.round(performance.now() - start);
+          return { ...prov, latencyMs: latency > 0 ? latency : 100 };
+        } catch {
+          return { ...prov, latencyMs: 350 };
+        }
+      })
+    );
+    this.providers = updated;
+    await db.saveSetting('rss_providers', updated);
+    return updated;
+  }
+
+  /**
+   * Parse RSS XML into TorrentSource array with smart title keyword filtering and genuine magnet / torrent links
    */
   public parseRssXmlToSources(xmlText: string, providerName: string, queryFilter?: string): TorrentSource[] {
     const parser = new DOMParser();
@@ -159,14 +256,18 @@ class SourceService {
         }
       }
 
-      const link = item.querySelector('link')?.textContent || item.querySelector('enclosure')?.getAttribute('url') || '';
-      const guid = item.querySelector('guid')?.textContent || `${Date.now()}_${idx}`;
+      const rawLink = item.querySelector('link')?.textContent?.trim() || '';
+      const enclosureUrl = item.querySelector('enclosure')?.getAttribute('url')?.trim() || '';
+      const rawGuid = item.querySelector('guid')?.textContent?.trim() || '';
       const pubDate = item.querySelector('pubDate')?.textContent || new Date().toISOString();
       
-      // Honest parsing of RSS seeders / leechers / size
-      const nyaaSeeders = item.getElementsByTagNameNS('https://nyaa.si/xmlns/nyaa', 'seeders')[0]?.textContent;
-      const nyaaLeechers = item.getElementsByTagNameNS('https://nyaa.si/xmlns/nyaa', 'leechers')[0]?.textContent;
-      const nyaaSize = item.getElementsByTagNameNS('https://nyaa.si/xmlns/nyaa', 'size')[0]?.textContent;
+      // 1. Honest parsing of RSS seeders / leechers / size
+      const nyaaSeeders = item.getElementsByTagNameNS('https://nyaa.si/xmlns/nyaa', 'seeders')[0]?.textContent ||
+        item.getElementsByTagName('nyaa:seeders')[0]?.textContent;
+      const nyaaLeechers = item.getElementsByTagNameNS('https://nyaa.si/xmlns/nyaa', 'leechers')[0]?.textContent ||
+        item.getElementsByTagName('nyaa:leechers')[0]?.textContent;
+      const nyaaSize = item.getElementsByTagNameNS('https://nyaa.si/xmlns/nyaa', 'size')[0]?.textContent ||
+        item.getElementsByTagName('nyaa:size')[0]?.textContent;
       
       let seeders = nyaaSeeders ? parseInt(nyaaSeeders, 10) : 0;
       let leechers = nyaaLeechers ? parseInt(nyaaLeechers, 10) : 0;
@@ -190,10 +291,53 @@ class SourceService {
         size = 'N/A';
       }
 
+      // 2. Real info-hash and download URL resolution
+      const nyaaInfoHash = item.getElementsByTagNameNS('https://nyaa.si/xmlns/nyaa', 'infoHash')[0]?.textContent?.trim() ||
+        item.getElementsByTagName('nyaa:infoHash')[0]?.textContent?.trim() ||
+        item.querySelector('infoHash')?.textContent?.trim() || '';
+
+      let infoHash = '';
+      if (this.isValidInfoHash(nyaaInfoHash)) {
+        infoHash = nyaaInfoHash.toLowerCase();
+      } else if (rawLink.startsWith('magnet:?')) {
+        const match = rawLink.match(/xt=urn:btih:([a-zA-Z0-9]+)/i);
+        if (match && this.isValidInfoHash(match[1])) {
+          infoHash = match[1].toLowerCase();
+        }
+      } else if (this.isValidInfoHash(rawGuid)) {
+        infoHash = rawGuid.toLowerCase();
+      } else {
+        // Check if rawLink contains a 40-char hex info-hash
+        const linkHashMatch = rawLink.match(/\/([a-f0-9]{40})(?:\.torrent)?$/i);
+        if (linkHashMatch && this.isValidInfoHash(linkHashMatch[1])) {
+          infoHash = linkHashMatch[1].toLowerCase();
+        }
+      }
+
+      // 3. Resolve .torrent download URL
+      let torrentUrl: string | undefined = undefined;
+      if (this.isValidUrl(rawLink) && (rawLink.endsWith('.torrent') || rawLink.includes('/download/') || rawLink.includes('topics/rss') || rawLink.includes('Download'))) {
+        torrentUrl = rawLink;
+      } else if (this.isValidUrl(enclosureUrl)) {
+        torrentUrl = enclosureUrl;
+      } else if (this.isValidUrl(rawLink)) {
+        torrentUrl = rawLink;
+      }
+
+      // 4. Construct genuine magnet link (never fabricate with a URL in xt=urn:btih:)
+      let magnetLink = '';
+      if (rawLink.startsWith('magnet:?') && this.isValidMagnetUri(rawLink)) {
+        magnetLink = rawLink;
+      } else if (infoHash) {
+        const trackersQuery = DEFAULT_ANIME_TRACKERS.map(t => `&tr=${encodeURIComponent(t)}`).join('');
+        magnetLink = `magnet:?xt=urn:btih:${infoHash}&dn=${encodeURIComponent(title)}${trackersQuery}`;
+      }
+
       const info = this.parseReleaseInfo(title);
+      const uniqueId = `rss_${providerName}_${infoHash || (rawGuid ? encodeURIComponent(rawGuid).slice(-30) : idx)}_${idx}`;
 
       sources.push({
-        id: `rss_${providerName}_${guid}_${idx}`,
+        id: uniqueId,
         title,
         group: info.group,
         resolution: info.resolution,
@@ -203,8 +347,9 @@ class SourceService {
         seeders,
         leechers,
         uploadedDate: pubDate.split(' ').slice(0, 4).join(' '),
-        magnetLink: link.startsWith('magnet:') ? link : `magnet:?xt=urn:btih:${guid}&dn=${encodeURIComponent(title)}`,
-        torrentUrl: link.endsWith('.torrent') ? link : undefined,
+        magnetLink,
+        torrentUrl,
+        infoHash: infoHash || undefined,
         provider: providerName as any,
         episodeNum: info.episodeNum,
         isCached: false
@@ -268,7 +413,7 @@ class SourceService {
     const searchTerms = [romajiTitle, animeTitle].filter((t): t is string => Boolean(t && t.trim()));
     const primaryTerm = searchTerms[0] || animeTitle;
 
-    // 1. Check cached database sources and ensure relevance
+    // 1. Check cached database sources and ensure relevance AND valid stream/torrent targets
     const cached = await db.getSourcesForAnime(animeId);
     if (cached && cached.length > 0) {
       const normalize = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, ' ').trim();
@@ -276,13 +421,15 @@ class SourceService {
       const keywords = cleanTerm.split(' ').filter(k => k.length >= 3);
       const relevantCached = cached.filter(src => {
         const cleanTitle = normalize(src.title);
-        return cleanTitle.includes(cleanTerm) || (keywords.length > 0 && keywords.some(k => cleanTitle.includes(k)));
+        const matchesTerm = cleanTitle.includes(cleanTerm) || (keywords.length > 0 && keywords.some(k => cleanTitle.includes(k)));
+        const hasValidTarget = Boolean(this.getSourceUri(src));
+        return matchesTerm && hasValidTarget;
       });
 
       if (relevantCached.length > 0) {
         return this.rankSources(relevantCached);
       } else {
-        // Cached sources belonged to an old bug/wrong feed, purge and re-fetch
+        // Cached sources belonged to an old bug/wrong feed or had invalid magnet links, purge and re-fetch
         await db.clearSourcesForAnime(animeId);
       }
     }

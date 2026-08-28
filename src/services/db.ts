@@ -1,7 +1,7 @@
-import { AnimeItem, DownloadTask, LibraryEntry, TorrentSource } from '../types/anime';
+import { AnimeItem, LibraryEntry, TorrentSource } from '../types/anime';
 
 const DB_NAME = 'yozora_db';
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 
 export class YozoraDB {
   private dbPromise: Promise<IDBDatabase>;
@@ -12,6 +12,7 @@ export class YozoraDB {
 
       request.onupgradeneeded = (event) => {
         const db = (event.target as IDBOpenDBRequest).result;
+        const oldVersion = event.oldVersion;
 
         // Store for cached anime metadata with TTL
         if (!db.objectStoreNames.contains('anime_cache')) {
@@ -46,6 +47,15 @@ export class YozoraDB {
           const srcStore = db.createObjectStore('sources_cache', { keyPath: 'id' });
           srcStore.createIndex('animeId', 'animeId', { unique: false });
           srcStore.createIndex('cachedAt', 'cachedAt', { unique: false });
+        } else if (oldVersion < 3) {
+          // Version 3 migration: Purge old cached sources that may have had fabricated/invalid magnet links
+          try {
+            const tx = (event.target as IDBOpenDBRequest).transaction;
+            const srcStore = tx?.objectStore('sources_cache');
+            srcStore?.clear();
+          } catch (e) {
+            console.warn('sources_cache cleanup note:', e);
+          }
         }
 
         // Store for user settings, RSS feeds, and Matugen config
@@ -166,29 +176,6 @@ export class YozoraDB {
     store.put(entry);
   }
 
-  // --- Downloads & Cache Store ---
-  async getDownloads(): Promise<DownloadTask[]> {
-    const store = await this.getStore('downloads_store', 'readonly');
-    return new Promise((resolve) => {
-      const req = store.getAll();
-      req.onsuccess = () => resolve(req.result || []);
-      req.onerror = () => {
-        console.error('IndexedDB getDownloads failed:', req.error);
-        resolve([]);
-      };
-    });
-  }
-
-  async saveDownloadTask(task: DownloadTask): Promise<void> {
-    const store = await this.getStore('downloads_store', 'readwrite');
-    store.put(task);
-  }
-
-  async deleteDownloadTask(id: string): Promise<void> {
-    const store = await this.getStore('downloads_store', 'readwrite');
-    store.delete(id);
-  }
-
   // --- Sources Cache (TTL = 6 Hours) ---
   async getSourcesForAnime(animeId: string): Promise<TorrentSource[]> {
     const store = await this.getStore('sources_cache', 'readonly');
@@ -243,6 +230,11 @@ export class YozoraDB {
         store.delete(key);
       }
     };
+  }
+
+  async clearAllSourcesCache(): Promise<void> {
+    const store = await this.getStore('sources_cache', 'readwrite');
+    store.clear();
   }
 
   // --- Settings Store ---

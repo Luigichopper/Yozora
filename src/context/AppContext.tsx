@@ -3,7 +3,6 @@ import {
   AnimeItem,
   Episode,
   TorrentSource,
-  DownloadTask,
   LibraryEntry,
   MatugenPalette,
   WatchStatus
@@ -18,7 +17,7 @@ import { torrentEngine } from '../services/torrentEngine';
 
 import { anilistService } from '../services/tracking/anilist';
 
-export type ActiveView = 'discover' | 'browse' | 'library' | 'cache' | 'settings';
+export type ActiveView = 'discover' | 'browse' | 'library' | 'settings';
 
 interface ActivePlayerState {
   isOpen: boolean;
@@ -42,7 +41,7 @@ interface AppContextType {
   isScheduleOpen: boolean;
   setIsScheduleOpen: (open: boolean) => void;
   
-  // Playback
+  // Direct Playback
   playerState: ActivePlayerState | null;
   openPlayer: (anime: AnimeItem, episode?: Episode, videoUrl?: string, sourceTitle?: string) => void;
   closePlayer: () => void;
@@ -59,13 +58,6 @@ interface AppContextType {
   setAnimeProgress: (animeId: string, episodeNum: number) => Promise<void>;
   setAnimeScore: (animeId: string, score: number) => Promise<void>;
   getLibraryEntry: (animeId: string) => LibraryEntry | undefined;
-
-  // Downloads & BitTorrent Cache
-  downloadTasks: DownloadTask[];
-  addDownloadTask: (anime: AnimeItem, episode: Episode, source: TorrentSource) => Promise<void>;
-  addCustomMagnetTask: (magnetUri: string) => Promise<boolean>;
-  toggleDownloadPause: (id: string) => Promise<void>;
-  deleteDownloadTask: (id: string) => Promise<void>;
 
   // Quick Search
   searchQuery: string;
@@ -89,9 +81,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [activePalette, setActivePaletteState] = useState<MatugenPalette>(MATUGEN_PALETTES[0]);
   const [blurEnabled, setBlurEnabled] = useState<boolean>(true);
 
-  // Library & Cache state backed by IndexedDB
+  // Library & tracking state backed by IndexedDB
   const [library, setLibrary] = useState<Record<string, LibraryEntry>>({});
-  const [downloadTasks, setDownloadTasks] = useState<DownloadTask[]>([]);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
 
   // Initial load from IndexedDB
@@ -107,10 +98,6 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         // 2. Library
         const dbLib = await db.getLibrary();
         setLibrary(dbLib);
-
-        // 3. Downloads
-        const dbDownloads = await db.getDownloads();
-        setDownloadTasks(dbDownloads);
       } catch (err) {
         console.error('Failed to initialize Yozora state from IndexedDB:', err);
         showToast('Warning: Unable to load saved user data from local database.', 'warning');
@@ -153,9 +140,6 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       videoUrl: videoUrl || '',
       sourceTitle: sourceTitle || `[Direct / BitTorrent] ${anime.title} - EP ${ep.epNumber.toString().padStart(2, '0')}`
     });
-
-    // Update library watching progress
-    setAnimeProgress(anime.id, ep.epNumber);
   };
 
   const closePlayer = () => {
@@ -168,7 +152,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       animeId,
       watchStatus: status,
       currentEpisode: 1,
-      totalEpisodes: anime ? anime.episodesCount : 12,
+      totalEpisodes: anime ? anime.episodesCount : 0,
       score: 8.0,
       lastWatchedAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
@@ -176,6 +160,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
     const updatedEntry: LibraryEntry = {
       ...existing,
+      totalEpisodes: anime ? anime.episodesCount : existing.totalEpisodes,
       watchStatus: status,
       updatedAt: new Date().toISOString()
     };
@@ -191,16 +176,18 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       animeId,
       watchStatus: 'Watching',
       currentEpisode: episodeNum,
-      totalEpisodes: anime ? anime.episodesCount : 12,
+      totalEpisodes: anime ? anime.episodesCount : 0,
       score: 8.0,
       lastWatchedAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     };
 
-    const isCompleted = anime && episodeNum >= anime.episodesCount;
+    const totalEps = anime ? anime.episodesCount : existing.totalEpisodes;
+    const isCompleted = totalEps > 0 && episodeNum >= totalEps;
 
     const updatedEntry: LibraryEntry = {
       ...existing,
+      totalEpisodes: totalEps,
       watchStatus: isCompleted ? 'Completed' : 'Watching',
       currentEpisode: episodeNum,
       lastWatchedAt: new Date().toISOString(),
@@ -217,6 +204,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         anilistService.updateProgress(mediaId, episodeNum, anime.episodesCount).then(synced => {
           if (synced) {
             showToast(`Synced EP ${episodeNum} to your AniList profile!`, 'success');
+          } else {
+            showToast('AniList watch sync was not recorded. Check connection or token in Settings.', 'warning');
           }
         });
       }
@@ -242,175 +231,6 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     return library[animeId];
   };
 
-  const addDownloadTask = async (anime: AnimeItem, episode: Episode, source: TorrentSource) => {
-    const taskId = `dl-${Date.now()}`;
-
-    const newTask: DownloadTask = {
-      id: taskId,
-      animeId: anime.id,
-      animeTitle: anime.title,
-      episodeNum: episode.epNumber,
-      sourceTitle: source.title,
-      group: source.group,
-      resolution: source.resolution,
-      fileSize: source.fileSize,
-      totalBytes: 1420000000,
-      downloadedBytes: 0,
-      downloadSpeed: 0,
-      uploadSpeed: 0,
-      progress: 0,
-      status: 'downloading',
-      peers: source.seeders || 0,
-      etaSeconds: 120,
-      addedAt: new Date().toLocaleDateString() + ' ' + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      videoUrl: ''
-    };
-
-    await db.saveDownloadTask(newTask);
-    setDownloadTasks(prev => [newTask, ...prev]);
-    showToast(`Connecting to BitTorrent swarm for "${source.title}"...`, 'info');
-
-    // 1. Register with in-browser WebTorrent transfer engine (mapped by taskId)
-    try {
-      torrentEngine.addTorrent(source.magnetLink, (stats) => {
-        setDownloadTasks(prev => prev.map(t => {
-          if (t.id === taskId) {
-            const isDone = stats.state === 'completed' || stats.progress >= 100;
-            const updated: DownloadTask = {
-              ...t,
-              downloadedBytes: stats.downloaded,
-              totalBytes: stats.length,
-              downloadSpeed: stats.downloadSpeed,
-              uploadSpeed: stats.uploadSpeed,
-              progress: stats.progress,
-              peers: stats.numPeers,
-              etaSeconds: stats.timeRemaining,
-              status: isDone ? 'completed' : stats.state === 'paused' ? 'paused' : 'downloading',
-              videoUrl: stats.streamUrl || t.videoUrl
-            };
-            db.saveDownloadTask(updated);
-            return updated;
-          }
-          return t;
-        }));
-      }, taskId);
-    } catch (e) {
-      console.warn('WebTorrent engine add error:', e);
-    }
-
-    // 2. Also register with native rqbit daemon if available
-    try {
-      const streamRes = await rqbitService.addTorrentAndGetStream(source.magnetLink, anime.title);
-      if (streamRes?.stream_url) {
-        setDownloadTasks(prev => prev.map(t => t.id === taskId ? { ...t, videoUrl: streamRes.stream_url } : t));
-      }
-    } catch (e) {
-      // rqbit offline is non-fatal
-    }
-  };
-
-  const addCustomMagnetTask = async (magnetUri: string): Promise<boolean> => {
-    const parsed = sourceService.parseMagnet(magnetUri);
-    if (!parsed) {
-      showToast('Invalid magnet URI format. Must start with magnet:?xt=urn:btih:...', 'error');
-      return false;
-    }
-
-    const taskId = `dl-magnet-${Date.now()}`;
-
-    const newTask: DownloadTask = {
-      id: taskId,
-      animeId: 'custom',
-      animeTitle: parsed.name,
-      episodeNum: 1,
-      sourceTitle: parsed.name,
-      group: 'P2P Swarm',
-      resolution: '1080p',
-      fileSize: '1.40 GB',
-      totalBytes: 1400000000,
-      downloadedBytes: 0,
-      downloadSpeed: 0,
-      uploadSpeed: 0,
-      progress: 0,
-      status: 'downloading',
-      peers: 0,
-      etaSeconds: 120,
-      addedAt: new Date().toLocaleDateString() + ' ' + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      videoUrl: ''
-    };
-
-    await db.saveDownloadTask(newTask);
-    setDownloadTasks(prev => [newTask, ...prev]);
-    showToast(`Connecting to BitTorrent swarm for "${parsed.name}"...`, 'info');
-
-    // 1. Register with in-browser WebTorrent transfer engine (mapped by taskId)
-    try {
-      torrentEngine.addTorrent(magnetUri, (stats) => {
-        setDownloadTasks(prev => prev.map(t => {
-          if (t.id === taskId) {
-            const isDone = stats.state === 'completed' || stats.progress >= 100;
-            const updated: DownloadTask = {
-              ...t,
-              downloadedBytes: stats.downloaded,
-              totalBytes: stats.length,
-              downloadSpeed: stats.downloadSpeed,
-              uploadSpeed: stats.uploadSpeed,
-              progress: stats.progress,
-              peers: stats.numPeers,
-              etaSeconds: stats.timeRemaining,
-              status: isDone ? 'completed' : stats.state === 'paused' ? 'paused' : 'downloading',
-              videoUrl: stats.streamUrl || t.videoUrl
-            };
-            db.saveDownloadTask(updated);
-            return updated;
-          }
-          return t;
-        }));
-      }, taskId);
-    } catch (e) {
-      console.warn('WebTorrent engine add error:', e);
-    }
-
-    // 2. Also register with native rqbit daemon if available
-    try {
-      const streamRes = await rqbitService.addTorrentAndGetStream(magnetUri, parsed.name);
-      if (streamRes?.stream_url) {
-        setDownloadTasks(prev => prev.map(t => t.id === taskId ? { ...t, videoUrl: streamRes.stream_url } : t));
-      }
-    } catch (e) {
-      // rqbit offline is non-fatal
-    }
-
-    return true;
-  };
-
-  const toggleDownloadPause = async (id: string) => {
-    setDownloadTasks(prev => {
-      const updated = prev.map(task => {
-        if (task.id === id) {
-          const nextStatus = task.status === 'downloading' ? 'paused' : 'downloading';
-          torrentEngine.togglePause(id);
-          const u: DownloadTask = {
-            ...task,
-            status: nextStatus,
-            downloadSpeed: nextStatus === 'paused' ? 0 : task.downloadSpeed
-          };
-          db.saveDownloadTask(u);
-          return u;
-        }
-        return task;
-      });
-      return updated;
-    });
-  };
-
-  const deleteDownloadTask = async (id: string) => {
-    torrentEngine.removeTorrent(id);
-    await db.deleteDownloadTask(id);
-    setDownloadTasks(prev => prev.filter(task => task.id !== id));
-    showToast('Removed task from Cache Manager.', 'info');
-  };
-
   return (
     <AppContext.Provider
       value={{
@@ -432,11 +252,6 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         setAnimeProgress,
         setAnimeScore,
         getLibraryEntry,
-        downloadTasks,
-        addDownloadTask,
-        addCustomMagnetTask,
-        toggleDownloadPause,
-        deleteDownloadTask,
         searchQuery,
         setSearchQuery,
         toasts,

@@ -1,6 +1,6 @@
 import React from 'react';
-import { Compass, Star, HardDriveDownload, Settings, Search, LayoutGrid } from 'lucide-react';
-import { useApp, ActiveView } from '../context/AppContext';
+import { Compass, Star, Settings, Search, LayoutGrid } from 'lucide-react';
+import { useApp } from '../context/AppContext';
 
 export const Sidebar: React.FC = () => {
   const { currentView, setCurrentView } = useApp();
@@ -43,15 +43,6 @@ export const Sidebar: React.FC = () => {
         >
           <Star size={20} />
           <span className="nav-label">追番</span>
-        </button>
-
-        <button
-          className={`nav-item ${currentView === 'cache' ? 'active' : ''}`}
-          onClick={() => setCurrentView('cache')}
-          title="Offline Cache & Torrents / 缓存"
-        >
-          <HardDriveDownload size={20} />
-          <span className="nav-label">缓存</span>
         </button>
       </div>
 

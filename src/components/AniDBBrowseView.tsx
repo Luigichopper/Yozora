@@ -64,17 +64,17 @@ export const AniDBBrowseView: React.FC = () => {
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '18px' }}>
         <div>
           <h1 style={{ fontSize: '24px', fontWeight: 800, letterSpacing: '-0.4px', color: 'var(--md-sys-color-on-surface)' }}>
-            Browse Anime (番组索引)
+            Anime Catalog (番组索引)
           </h1>
           <p style={{ fontSize: '13px', color: 'var(--md-sys-color-on-surface-variant)', marginTop: '4px' }}>
-            {sortedAnime.length.toLocaleString()} titles indexed in local SQLite / AniDB cache
+            {sortedAnime.length.toLocaleString()} titles retrieved via AniList GraphQL
           </p>
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', background: 'rgba(255, 152, 0, 0.15)', border: '1px solid rgba(255, 152, 0, 0.4)', borderRadius: '999px', padding: '4px 12px' }}>
-            <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#ff9800' }} />
-            <span style={{ fontSize: '12px', fontWeight: 600, color: '#ff9800' }}>AniDB Official Client API</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', background: 'rgba(2, 169, 255, 0.15)', border: '1px solid rgba(2, 169, 255, 0.4)', borderRadius: '999px', padding: '4px 12px' }}>
+            <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#02a9ff' }} />
+            <span style={{ fontSize: '12px', fontWeight: 600, color: '#02a9ff' }}>AniList GraphQL API</span>
           </div>
         </div>
       </div>

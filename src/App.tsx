@@ -4,7 +4,6 @@ import { Sidebar } from './components/Sidebar';
 import { DiscoverView } from './components/DiscoverView';
 import { AniDBBrowseView } from './components/AniDBBrowseView';
 import { LibraryView } from './components/LibraryView';
-import { CacheManagerView } from './components/CacheManagerView';
 import { SettingsView } from './components/SettingsView';
 import { AnimeDetailModal } from './components/AnimeDetailModal';
 import { ScheduleModal } from './components/ScheduleModal';
@@ -28,7 +27,6 @@ export const AppContent: React.FC = () => {
           {currentView === 'discover' && <DiscoverView />}
           {currentView === 'browse' && <AniDBBrowseView />}
           {currentView === 'library' && <LibraryView />}
-          {currentView === 'cache' && <CacheManagerView />}
           {currentView === 'settings' && <SettingsView />}
         </main>
       </div>

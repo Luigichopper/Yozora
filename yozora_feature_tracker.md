@@ -19,7 +19,7 @@
 
 | File | What It Does | Status | Notes |
 |---|---|---|---|
-| [`db.ts`](file:///c:/Users/Luigi/Documents/Yozora/src/services/db.ts) | Real IndexedDB database with 6 stores: `anime_cache`, `library_store`, `danmaku_store`, `downloads_store`, `sources_cache`, `settings_store` | ✅ | Full schema with TTL caching and user library tracking |
+| [`db.ts`](file:///c:/Users/Luigi/Documents/Yozora/src/services/db.ts) | Real IndexedDB database with schema stores: `anime_cache`, `library_store`, `danmaku_store`, `sources_cache`, `settings_store` | ✅ | Full schema with TTL caching and user library tracking |
 | [`rqbitService.ts`](file:///c:/Users/Luigi/Documents/Yozora/src/services/rqbitService.ts) | Bridges Tauri IPC and REST API driving `rqbit server start` background subprocess for sequential piece prioritization | ⚡ | Exposes `POST /torrents` and Range-aware `GET /torrents/{id}/stream/{idx}` directly to player and mpv |
 | [`streamService.ts`](file:///c:/Users/Luigi/Documents/Yozora/src/services/streamService.ts) | Anime stream resolver with native HLS (`.m3u8`) streaming support using `hls.js` | ✅ | Direct anime streams with multi-mirror failover |
 | [`anidbService.ts`](file:///c:/Users/Luigi/Documents/Yozora/src/services/anidbService.ts) | Multi-tier metadata client querying public **AniList GraphQL** with canonical **AniDB ID** space mapping and 7-day TTL cache | ✅ | Live GraphQL queries for trending, seasonal schedules, and search |
@@ -40,9 +40,7 @@
 | Magnet URI parsing (info-hash, name, trackers) | ✅ | `sourceService.parseMagnet()` correctly extracts all fields |
 | Tauri rqbit process manager | ⚡ | Spawns `rqbit server start <dir> --http-api-listen-addr 127.0.0.1:3030` as background subprocess |
 | Sequential piece prioritization & streaming | ⚡ | Handled natively by `rqbit` serving Range-aware `http://127.0.0.1:3030/torrents/{id}/stream/0` |
-| Direct Stream handoff | ⚡ | Direct Stream button passes sequential stream URL directly to player / external mpv |
-| Source health ranking algorithm | ✅ | `rankSources()`: seeders × 1.5 + resolution/codec/group bonuses |
-| Download task manager (pause/resume/delete) | ✅ | Managed task list in CacheManagerView |
+| Direct BitTorrent & CDN streaming pipeline | ⚡ | Sequential streaming via `rqbit`, WebTorrent, and direct CDN resolvers |
 
 ---
 
