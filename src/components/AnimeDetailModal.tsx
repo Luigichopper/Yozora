@@ -4,6 +4,7 @@ import { AnimeItem, Episode, TorrentSource, WatchStatus } from '../types/anime';
 import { useApp } from '../context/AppContext';
 import { sourceService } from '../services/sourceService';
 import { rqbitService } from '../services/rqbitService';
+import { anidbService } from '../services/anidbService';
 
 interface AnimeDetailModalProps {
   anime: AnimeItem;
@@ -11,7 +12,7 @@ interface AnimeDetailModalProps {
 }
 
 export const AnimeDetailModal: React.FC<AnimeDetailModalProps> = ({ anime, onClose }) => {
-  const { openPlayer, library, setAnimeStatus, setAnimeProgress, addDownloadTask, showToast } = useApp();
+  const { openPlayer, library, setAnimeStatus, setAnimeProgress, addDownloadTask, showToast, setSelectedAnime } = useApp();
 
   const [activeTab, setActiveTab] = useState<'overview' | 'episodes' | 'sources'>('overview');
   const [sources, setSources] = useState<TorrentSource[]>([]);
@@ -25,7 +26,7 @@ export const AnimeDetailModal: React.FC<AnimeDetailModalProps> = ({ anime, onClo
     async function loadSources() {
       setLoadingSources(true);
       try {
-        const srcList = await sourceService.getSourcesForAnime(anime.id, anime.title);
+        const srcList = await sourceService.getSourcesForAnime(anime.id, anime.title, anime.romajiTitle);
         if (isMounted) setSources(srcList);
       } catch (e) {
         console.error('Failed to load sources:', e);
@@ -35,7 +36,15 @@ export const AnimeDetailModal: React.FC<AnimeDetailModalProps> = ({ anime, onClo
     }
     loadSources();
     return () => { isMounted = false; };
-  }, [anime.id, anime.title]);
+  }, [anime.id, anime.title, anime.romajiTitle]);
+
+  const episodeCountLabel = anime.type === 'Movie'
+    ? 'Movie (1 ep)'
+    : anime.episodesCount > 0
+    ? `${anime.episodesCount} Episodes`
+    : anime.status === 'Airing'
+    ? `Airing (${anime.episodes.length} eps)`
+    : 'TBA';
 
   return (
     <div className="modal-overlay" onClick={onClose}>
@@ -43,7 +52,7 @@ export const AnimeDetailModal: React.FC<AnimeDetailModalProps> = ({ anime, onClo
         {/* Banner Hero */}
         <div style={{ position: 'relative', width: '100%', height: '240px', overflow: 'hidden' }}>
           <img
-            src={anime.banner}
+            src={anime.banner || anime.poster}
             alt={anime.title}
             style={{ width: '100%', height: '100%', objectFit: 'cover' }}
           />
@@ -104,7 +113,7 @@ export const AnimeDetailModal: React.FC<AnimeDetailModalProps> = ({ anime, onClo
             />
 
             <div style={{ flex: 1 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px', flexWrap: 'wrap' }}>
                 <span
                   style={{
                     background: 'rgba(255, 152, 0, 0.2)',
@@ -130,6 +139,18 @@ export const AnimeDetailModal: React.FC<AnimeDetailModalProps> = ({ anime, onClo
                 >
                   {anime.type} • {anime.season}
                 </span>
+                <span
+                  style={{
+                    background: 'rgba(255, 255, 255, 0.1)',
+                    color: '#fff',
+                    fontSize: '11px',
+                    fontWeight: 600,
+                    padding: '2px 8px',
+                    borderRadius: '6px'
+                  }}
+                >
+                  {episodeCountLabel}
+                </span>
                 <span style={{ display: 'flex', alignItems: 'center', gap: '4px', color: '#ffeb3b', fontSize: '12px', fontWeight: 700 }}>
                   <Star size={12} fill="#ffeb3b" /> {anime.rating.toFixed(2)} ({anime.votesCount.toLocaleString()} votes)
                 </span>
@@ -142,7 +163,7 @@ export const AnimeDetailModal: React.FC<AnimeDetailModalProps> = ({ anime, onClo
             </div>
 
             {/* Quick Play & Library Status */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
               <button
                 className="section-btn"
                 style={{
@@ -158,7 +179,37 @@ export const AnimeDetailModal: React.FC<AnimeDetailModalProps> = ({ anime, onClo
                 }}
               >
                 <Play size={16} fill="currentColor" />
-                <span>Play Ep 1</span>
+                <span>{anime.type === 'Movie' ? 'Play Movie' : 'Play Ep 1'}</span>
+              </button>
+
+              <button
+                className="section-btn"
+                style={{
+                  background: 'rgba(255,255,255,0.1)',
+                  borderColor: 'var(--md-sys-color-outline-variant)',
+                  padding: '8px 16px',
+                  fontWeight: 600
+                }}
+                onClick={async () => {
+                  showToast(`Connecting release & launching mpv for "${anime.title}"...`, 'info');
+                  const s = await sourceService.getSourcesForAnime(anime.id, anime.title, anime.romajiTitle);
+                  if (s.length > 0) {
+                    try {
+                      const res = await rqbitService.addTorrentAndGetStream(s[0].magnetLink, anime.title);
+                      if (res?.stream_url) {
+                        await rqbitService.launchExternalMpv(res.stream_url, anime.title);
+                        showToast('Launched in external mpv!', 'success');
+                      }
+                    } catch (err: any) {
+                      showToast(err.message || 'Failed to start mpv', 'error');
+                    }
+                  } else {
+                    showToast('No releases found for this title yet', 'warning');
+                  }
+                }}
+              >
+                <Play size={14} fill="currentColor" />
+                <span>Play in mpv</span>
               </button>
 
               <select
@@ -195,7 +246,7 @@ export const AnimeDetailModal: React.FC<AnimeDetailModalProps> = ({ anime, onClo
             style={{ width: 'auto', padding: '12px 16px', borderRadius: 0, height: 'auto', borderBottom: activeTab === 'episodes' ? '2px solid var(--md-sys-color-primary)' : 'none', color: activeTab === 'episodes' ? 'var(--md-sys-color-primary)' : 'var(--md-sys-color-on-surface-variant)' }}
             onClick={() => setActiveTab('episodes')}
           >
-            Episodes ({anime.episodes.length || anime.episodesCount})
+            Episodes ({anime.type === 'Movie' ? 1 : anime.episodes.length || anime.episodesCount || 'TBA'})
           </button>
           <button
             className="nav-item"
@@ -258,7 +309,7 @@ export const AnimeDetailModal: React.FC<AnimeDetailModalProps> = ({ anime, onClo
                   <h3 style={{ fontSize: '15px', fontWeight: 600, color: 'var(--md-sys-color-primary)', marginBottom: '10px' }}>
                     Related Anime (Relations Tree)
                   </h3>
-                  <div style={{ display: 'flex', gap: '12px' }}>
+                  <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
                     {anime.relations.map(rel => (
                       <div
                         key={rel.id}
@@ -269,8 +320,18 @@ export const AnimeDetailModal: React.FC<AnimeDetailModalProps> = ({ anime, onClo
                           background: 'var(--md-sys-color-surface-container-high)',
                           padding: '8px 14px',
                           borderRadius: '12px',
-                          border: '1px solid var(--md-sys-color-outline-variant)'
+                          border: '1px solid var(--md-sys-color-outline-variant)',
+                          cursor: 'pointer'
                         }}
+                        onClick={async () => {
+                          if (rel.relationAnimeId) {
+                            const relAnime = await anidbService.getAnimeById(rel.relationAnimeId);
+                            if (relAnime) {
+                              setSelectedAnime(relAnime);
+                            }
+                          }
+                        }}
+                        title="Click to view details"
                       >
                         <img src={rel.poster} alt={rel.title} style={{ width: '36px', height: '50px', objectFit: 'cover', borderRadius: '6px' }} />
                         <div>
@@ -464,7 +525,27 @@ export const AnimeDetailModal: React.FC<AnimeDetailModalProps> = ({ anime, onClo
                         }}
                       >
                         <Play size={14} fill="currentColor" />
-                        <span>Direct Stream (rqbit)</span>
+                        <span>Direct Stream</span>
+                      </button>
+
+                      <button
+                        className="section-btn"
+                        style={{ padding: '8px 14px', background: 'rgba(255,255,255,0.08)' }}
+                        onClick={async () => {
+                          try {
+                            showToast(`Connecting & launching mpv for "${src.title}"...`, 'info');
+                            const streamRes = await rqbitService.addTorrentAndGetStream(src.magnetLink, anime.title);
+                            if (streamRes?.stream_url) {
+                              await rqbitService.launchExternalMpv(streamRes.stream_url, anime.title);
+                              showToast('Launched in mpv player!', 'success');
+                            }
+                          } catch (err: any) {
+                            showToast(err.message || 'Failed to start mpv', 'error');
+                          }
+                        }}
+                      >
+                        <Play size={14} fill="currentColor" />
+                        <span>mpv</span>
                       </button>
                     </div>
                   </div>

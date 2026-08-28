@@ -67,7 +67,12 @@ export const ScheduleModal: React.FC = () => {
             <div>
               <h2 style={{ fontSize: '18px', fontWeight: 800, color: '#fff' }}>新番时间表 • Seasonal Airing Timetable</h2>
               <span style={{ fontSize: '12px', color: 'var(--md-sys-color-on-surface-variant)' }}>
-                Spring 2026 / JST Broadcast Times from AniList & IndexedDB
+                {(() => {
+                  const now = new Date();
+                  const m = now.getMonth() + 1;
+                  const s = m <= 3 ? 'Winter' : m <= 6 ? 'Spring' : m <= 9 ? 'Summer' : 'Fall';
+                  return `${s} ${now.getFullYear()}`;
+                })()} / JST Airing Broadcasts from AniList & IndexedDB
               </span>
             </div>
           </div>

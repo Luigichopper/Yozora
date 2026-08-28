@@ -132,13 +132,27 @@ class AniDBService {
                 status
                 season
                 seasonYear
+                startDate { year month day }
+                endDate { year month day }
                 averageScore
+                popularity
                 genres
                 studios(isMain: true) { nodes { name } }
                 nextAiringEpisode {
                   airingAt
                   timeUntilAiring
                   episode
+                }
+                relations {
+                  edges {
+                    relationType
+                    node {
+                      id
+                      title { romaji english native }
+                      format
+                      coverImage { large extraLarge }
+                    }
+                  }
                 }
               }
             }
@@ -197,9 +211,28 @@ class AniDBService {
               status
               season
               seasonYear
+              startDate { year month day }
+              endDate { year month day }
               averageScore
+              popularity
               genres
               studios(isMain: true) { nodes { name } }
+              nextAiringEpisode {
+                airingAt
+                timeUntilAiring
+                episode
+              }
+              relations {
+                edges {
+                  relationType
+                  node {
+                    id
+                    title { romaji english native }
+                    format
+                    coverImage { large extraLarge }
+                  }
+                }
+              }
             }
           }
         `;
@@ -284,13 +317,27 @@ class AniDBService {
             status
             season
             seasonYear
+            startDate { year month day }
+            endDate { year month day }
             averageScore
+            popularity
             genres
             studios(isMain: true) { nodes { name } }
             nextAiringEpisode {
               airingAt
               timeUntilAiring
               episode
+            }
+            relations {
+              edges {
+                relationType
+                node {
+                  id
+                  title { romaji english native }
+                  format
+                  coverImage { large extraLarge }
+                }
+              }
             }
           }
         }
@@ -312,17 +359,44 @@ class AniDBService {
   }
 
   private mapMediaToAnimeItem(m: any): AnimeItem {
-    const epCount = m.episodes || 12;
-    const episodes: Episode[] = Array.from({ length: epCount }, (_, i) => ({
+    const isMovie = m.format === 'MOVIE';
+    const isOVA = m.format === 'OVA' || m.format === 'SPECIAL';
+    
+    // Accurate season calculation
+    let seasonName = m.season ? (m.season.charAt(0) + m.season.slice(1).toLowerCase()) : '';
+    if (!seasonName && m.startDate?.month) {
+      const mo = m.startDate.month;
+      if (mo >= 1 && mo <= 3) seasonName = 'Winter';
+      else if (mo >= 4 && mo <= 6) seasonName = 'Spring';
+      else if (mo >= 7 && mo <= 9) seasonName = 'Summer';
+      else seasonName = 'Fall';
+    }
+    const year = m.seasonYear || m.startDate?.year || 2025;
+    const season = seasonName ? `${seasonName} ${year}` : `${year}`;
+
+    // Accurate release date start
+    let airDateStart = `${year}-01-01`;
+    if (m.startDate?.year) {
+      const y = m.startDate.year;
+      const mo = (m.startDate.month || 1).toString().padStart(2, '0');
+      const d = (m.startDate.day || 1).toString().padStart(2, '0');
+      airDateStart = `${y}-${mo}-${d}`;
+    }
+
+    // Accurate episodes calculation
+    const totalEps = isMovie ? 1 : (m.episodes || (m.nextAiringEpisode ? Math.max(1, m.nextAiringEpisode.episode - 1) : 12));
+    const episodesCount = isMovie ? 1 : (m.episodes || (m.nextAiringEpisode ? Math.max(1, m.nextAiringEpisode.episode - 1) : 0));
+
+    const episodes: Episode[] = Array.from({ length: totalEps }, (_, i) => ({
       id: i + 1,
       epNumber: i + 1,
-      title: `Episode ${(i + 1).toString().padStart(2, '0')}`,
-      airDate: `${m.seasonYear || 2025}-01-01`,
-      durationMinutes: 24,
-      opSkipStart: 90,
-      opSkipEnd: 180,
-      edSkipStart: 1340,
-      edSkipEnd: 1430
+      title: isMovie ? 'Full Movie' : `Episode ${(i + 1).toString().padStart(2, '0')}`,
+      airDate: airDateStart,
+      durationMinutes: isMovie ? 110 : isOVA ? 45 : 24,
+      opSkipStart: isMovie ? undefined : 90,
+      opSkipEnd: isMovie ? undefined : 180,
+      edSkipStart: isMovie ? undefined : 1340,
+      edSkipEnd: isMovie ? undefined : 1430
     }));
 
     const cleanSynopsis = (m.description || 'No synopsis available.').replace(/<[^>]*>?/gm, '');
@@ -347,33 +421,53 @@ class AniDBService {
       broadcastDay = DAYS[idx];
     }
 
+    // Relations mapping
+    const relations: AnimeRelation[] = (m.relations?.edges || []).map((edge: any, idx: number) => {
+      const node = edge.node;
+      const relType = edge.relationType === 'PREQUEL' ? 'Prequel'
+        : edge.relationType === 'SEQUEL' ? 'Sequel'
+        : edge.relationType === 'SIDE_STORY' ? 'Side Story'
+        : edge.relationType === 'SPIN_OFF' ? 'Spin-off'
+        : edge.relationType === 'ALTERNATIVE' ? 'Alternative'
+        : 'Sequel';
+      return {
+        id: idx + 1,
+        title: node.title?.english || node.title?.romaji || 'Related Title',
+        type: relType,
+        relationAnimeId: `a${node.id}`,
+        poster: node.coverImage?.large || node.coverImage?.extraLarge || ''
+      };
+    });
+
+    const studioName = m.studios?.nodes?.[0]?.name || 'Animation Studio';
+
     return {
-      id: `a${m.idMal || m.id}`,
-      anidbId: m.idMal || m.id,
+      id: `a${m.id}`,           // Always use AniList ID as the canonical key
+      anidbId: m.idMal || m.id, // MAL ID for external tracking; falls back to AniList ID
       title: m.title.english || m.title.romaji,
       romajiTitle: m.title.romaji || m.title.english,
       japaneseTitle: m.title.native || m.title.romaji,
       englishTitle: m.title.english,
-      type: m.format === 'MOVIE' ? 'Movie' : m.format === 'OVA' ? 'OVA' : 'TV',
+      type: isMovie ? 'Movie' : m.format === 'OVA' ? 'OVA' : m.format === 'ONA' ? 'ONA' : 'TV',
       status: m.status === 'RELEASING' ? 'Airing' : m.status === 'NOT_YET_RELEASED' ? 'Upcoming' : 'Finished',
-      episodesCount: epCount,
-      season: `${m.season ? m.season.charAt(0) + m.season.slice(1).toLowerCase() : 'Spring'} ${m.seasonYear || 2025}`,
-      year: m.seasonYear || 2025,
+      episodesCount,
+      season,
+      year,
       rating: m.averageScore ? m.averageScore / 10 : 8.2,
-      votesCount: 8500,
+      votesCount: m.popularity || 8500,
       poster: m.coverImage?.extraLarge || m.coverImage?.large || '',
       banner: m.bannerImage || m.coverImage?.extraLarge || '',
-      bannerSubtitle: `${m.studios?.nodes?.[0]?.name || 'Studio'} • ${m.seasonYear || 2025}`,
+      bannerSubtitle: `${studioName} • ${season}`,
       genres: m.genres || ['Action', 'Drama'],
       tags: m.genres || ['Anime'],
-      studio: m.studios?.nodes?.[0]?.name || 'Animation Studio',
-      airDateStart: `${m.seasonYear || 2025}-01-01`,
+      studio: studioName,
+      airDateStart,
       broadcastDay,
       broadcastTime: '23:30 JST',
       isTrending: true,
       synopsis: cleanSynopsis,
       episodes,
-      relations: []
+      relations
     };
   }
 

@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import Hls from 'hls.js';
 import { StreamData, SubtitleTrack } from '../../types/anime';
 import { useAnimeStore } from '../../store/useAnimeStore';
+import { rqbitService } from '../../services/rqbitService';
 import { 
   Play, 
   Pause, 
@@ -9,7 +10,8 @@ import {
   VolumeX, 
   Maximize, 
   Minimize, 
-  SkipForward 
+  SkipForward,
+  ExternalLink
 } from 'lucide-react';
 
 interface VideoPlayerProps {
@@ -268,6 +270,18 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       >
         <div className="flex justify-between items-center text-white">
           <span className="text-sm font-medium">Episode {episodeNumber}</span>
+          {selectedSource?.url && (
+            <button
+              onClick={() => {
+                rqbitService.launchExternalMpv(selectedSource.url, `Episode ${episodeNumber}`);
+              }}
+              className="flex items-center gap-1.5 px-3 py-1 bg-black/60 hover:bg-black/80 border border-gray-700 hover:border-gray-500 rounded text-xs text-gray-200 transition"
+              title="Open in external hardware-accelerated MPV player"
+            >
+              <ExternalLink size={13} />
+              <span>Open in mpv</span>
+            </button>
+          )}
         </div>
 
         <div className="flex flex-col gap-2">

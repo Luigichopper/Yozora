@@ -9,17 +9,30 @@ export interface AnimeProvider {
 
 export class ConsumetProvider implements AnimeProvider {
   public name = 'Consumet Unified Scraper';
-  private baseUrl: string;
+  private defaultUrl: string = 'https://api.consumet.org/anime';
 
-  constructor(baseUrl: string = 'https://api.consumet.org/anime') {
-    this.baseUrl = baseUrl.replace(/\/$/, '');
+  private getBaseUrl(): string {
+    if (typeof localStorage !== 'undefined') {
+      const custom = localStorage.getItem('yozora_consumet_api_url');
+      if (custom && custom.trim()) return custom.trim().replace(/\/$/, '');
+    }
+    return this.defaultUrl;
   }
 
   async search(query: string): Promise<{ id: string; title: string; subOrDub: 'sub' | 'dub' }[]> {
-    const providers = ['gogoanime', 'zoro'];
+    const baseUrl = this.getBaseUrl();
+    const providers = ['gogoanime', 'zoro', 'animepahe'];
+    
     for (const provider of providers) {
       try {
-        const res = await fetch(`${this.baseUrl}/${provider}/${encodeURIComponent(query)}`);
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 3500);
+        
+        const res = await fetch(`${baseUrl}/${provider}/${encodeURIComponent(query)}`, {
+          signal: controller.signal
+        });
+        clearTimeout(timeoutId);
+
         if (!res.ok) continue;
         const data = await res.json();
         if (data.results && data.results.length > 0) {
@@ -30,7 +43,7 @@ export class ConsumetProvider implements AnimeProvider {
           }));
         }
       } catch (err) {
-        console.warn(`[Consumet] Search failed on provider ${provider}:`, err);
+        // Fail quietly on dead public endpoints
       }
     }
     return [];
@@ -38,7 +51,7 @@ export class ConsumetProvider implements AnimeProvider {
 
   async fetchEpisodes(compoundId: string): Promise<AnimeEpisode[]> {
     const [provider, id] = compoundId.includes(':') ? compoundId.split(':') : ['gogoanime', compoundId];
-    const res = await fetch(`${this.baseUrl}/${provider}/info/${encodeURIComponent(id)}`);
+    const res = await fetch(`${this.getBaseUrl()}/${provider}/info/${encodeURIComponent(id)}`);
     if (!res.ok) {
       throw new Error(`Failed to fetch episode list for ${compoundId}: HTTP ${res.status}`);
     }
@@ -61,7 +74,7 @@ export class ConsumetProvider implements AnimeProvider {
       ? compoundEpisodeId.split(':') 
       : ['gogoanime', compoundEpisodeId];
       
-    const res = await fetch(`${this.baseUrl}/${provider}/watch/${encodeURIComponent(epId)}`);
+    const res = await fetch(`${this.getBaseUrl()}/${provider}/watch/${encodeURIComponent(epId)}`);
     if (!res.ok) {
       throw new Error(`Failed to resolve stream for ${compoundEpisodeId}: HTTP ${res.status}`);
     }

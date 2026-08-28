@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { HardDriveDownload, Play, Pause, Trash2, ArrowDown, ArrowUp, Plus, CheckCircle, Radio, FolderOpen } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { anidbService } from '../services/anidbService';
@@ -7,6 +7,17 @@ export const CacheManagerView: React.FC = () => {
   const { downloadTasks, toggleDownloadPause, deleteDownloadTask, addCustomMagnetTask, openPlayer, showToast } = useApp();
   const [customMagnetInput, setCustomMagnetInput] = useState('');
   const [showAddMagnetModal, setShowAddMagnetModal] = useState(false);
+  const [storageQuotaGB, setStorageQuotaGB] = useState<string>('50.0');
+
+  useEffect(() => {
+    if (typeof navigator !== 'undefined' && navigator.storage?.estimate) {
+      navigator.storage.estimate().then(estimate => {
+        if (estimate.quota) {
+          setStorageQuotaGB((estimate.quota / (1024 * 1024 * 1024)).toFixed(1));
+        }
+      }).catch(() => {});
+    }
+  }, []);
 
   const totalDownloadSpeed = downloadTasks.reduce((acc, curr) => acc + (curr.status === 'downloading' ? curr.downloadSpeed : 0), 0);
   const totalUploadSpeed = downloadTasks.reduce((acc, curr) => acc + curr.uploadSpeed, 0);
@@ -69,7 +80,7 @@ export const CacheManagerView: React.FC = () => {
         <div style={{ background: 'var(--md-sys-color-surface-container)', border: '1px solid var(--md-sys-color-outline-variant)', borderRadius: '16px', padding: '16px' }}>
           <div style={{ fontSize: '12px', color: 'var(--md-sys-color-on-surface-variant)' }}>Cache Storage Quota</div>
           <div style={{ fontSize: '22px', fontWeight: 800, color: '#ff9800', marginTop: '4px' }}>
-            {totalGB} GB / 50.0 GB
+            {totalGB} GB / {storageQuotaGB} GB
           </div>
         </div>
       </div>
@@ -121,36 +132,39 @@ export const CacheManagerView: React.FC = () => {
                       className="poster-overlay-play"
                       style={{ position: 'static', width: '32px', height: '32px' }}
                       onClick={async () => {
-                        const anime = await anidbService.getAnimeById(task.animeId);
-                        if (anime) {
-                          const ep = anime.episodes.find(e => e.epNumber === task.episodeNum) || anime.episodes[0];
-                          openPlayer(anime, ep, task.videoUrl, task.sourceTitle);
-                        } else {
-                          // Custom magnet playback
-                          openPlayer({
-                            id: 'custom',
-                            anidbId: 99999,
-                            title: task.animeTitle,
-                            romajiTitle: task.animeTitle,
-                            japaneseTitle: task.animeTitle,
-                            type: 'TV',
-                            status: 'Finished',
-                            episodesCount: 1,
-                            season: '2025',
-                            year: 2025,
-                            rating: 8.5,
-                            votesCount: 100,
-                            poster: '',
-                            banner: '',
-                            synopsis: 'BitTorrent Swarm Cached Video Stream',
-                            genres: ['Cached'],
-                            tags: ['Offline'],
-                            studio: 'BitTorrent Swarm',
-                            airDateStart: '2025-01-01',
-                            episodes: [{ id: 1, epNumber: 1, title: task.sourceTitle, airDate: '2025-01-01', durationMinutes: 24 }],
-                            relations: []
-                          }, undefined, task.videoUrl, task.sourceTitle);
+                        if (task.animeId && task.animeId !== 'custom') {
+                          const anime = await anidbService.getAnimeById(task.animeId);
+                          if (anime) {
+                            const ep = anime.episodes.find(e => e.epNumber === task.episodeNum) || anime.episodes[0];
+                            openPlayer(anime, ep, task.videoUrl, task.sourceTitle);
+                            return;
+                          }
                         }
+
+                        // Custom magnet / direct download playback
+                        openPlayer({
+                          id: `custom_${task.id}`,
+                          anidbId: 99900 + (parseInt(task.id.replace(/\D/g, '').slice(-3)) || 1),
+                          title: task.animeTitle || task.sourceTitle,
+                          romajiTitle: task.animeTitle || task.sourceTitle,
+                          japaneseTitle: task.animeTitle || task.sourceTitle,
+                          type: 'TV',
+                          status: 'Finished',
+                          episodesCount: 1,
+                          season: `${new Date().getFullYear()}`,
+                          year: new Date().getFullYear(),
+                          rating: 8.5,
+                          votesCount: 100,
+                          poster: '',
+                          banner: '',
+                          synopsis: 'BitTorrent Swarm Cached Video Stream',
+                          genres: ['Cached'],
+                          tags: ['Offline'],
+                          studio: task.group || 'P2P Swarm',
+                          airDateStart: new Date().toISOString().split('T')[0],
+                          episodes: [{ id: 1, epNumber: task.episodeNum || 1, title: task.sourceTitle, airDate: new Date().toISOString().split('T')[0], durationMinutes: 24 }],
+                          relations: []
+                        }, undefined, task.videoUrl, task.sourceTitle);
                       }}
                       title="Play Offline Video"
                     >

@@ -48,7 +48,7 @@
       ]
     },
     "security": {
-      "csp": null
+      "csp": "default-src 'self' ipc: http://ipc.localhost; connect-src * 'self' http://localhost:* http://127.0.0.1:* ws://127.0.0.1:*; media-src * 'self' http://127.0.0.1:* http://localhost:* blob: data:;"
     },
     "windows": [
       {

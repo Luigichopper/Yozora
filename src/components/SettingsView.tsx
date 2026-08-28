@@ -6,6 +6,8 @@ import { sourceService, RSSFeedProvider } from '../services/sourceService';
 import { anidbService } from '../services/anidbService';
 import { matugenService } from '../services/matugenService';
 import { rqbitService, RqbitStatus } from '../services/rqbitService';
+import { anilistService } from '../services/tracking/anilist';
+import { db } from '../services/db';
 
 export const SettingsView: React.FC = () => {
   const { activePalette, setActivePalette, blurEnabled, setBlurEnabled, showToast } = useApp();
@@ -15,6 +17,7 @@ export const SettingsView: React.FC = () => {
   const [customRssName, setCustomRssName] = useState('');
   const [anidbClientName, setAnidbClientName] = useState('yozora_desktop');
   const [anidbClientVer, setAnidbClientVer] = useState('1');
+  const [anilistToken, setAnilistToken] = useState(anilistService.getToken() || '');
   const [matugenJsonInput, setMatugenJsonInput] = useState('');
   const [showJsonDialog, setShowJsonDialog] = useState(false);
   const [rqbitStatus, setRqbitStatus] = useState<RqbitStatus>({ running: false, listen_addr: '127.0.0.1:3030' });
@@ -30,12 +33,39 @@ export const SettingsView: React.FC = () => {
       const creds = anidbService.getCredentials();
       setAnidbClientName(creds.clientName);
       setAnidbClientVer(creds.clientVersion);
+      setAnilistToken(anilistService.getToken() || '');
+
+      const savedMpvPref = await db.getSetting<boolean>('use_external_mpv', false);
+      setUseExternalMpv(savedMpvPref);
 
       const rStatus = await rqbitService.checkStatus(`127.0.0.1:${rqbitListenPort}`);
       setRqbitStatus(rStatus);
     }
     loadData();
   }, [rqbitListenPort]);
+
+  const handleToggleExternalMpv = async () => {
+    const nextVal = !useExternalMpv;
+    setUseExternalMpv(nextVal);
+    await db.saveSetting('use_external_mpv', nextVal);
+    showToast(
+      nextVal
+        ? 'External mpv selected as primary player (10-bit HEVC & ASS subtitles).'
+        : 'In-app HTML5 player selected as primary player.',
+      'info'
+    );
+  };
+
+  const handleSaveAniListToken = () => {
+    if (anilistToken.trim()) {
+      anilistService.setToken(anilistToken.trim());
+      showToast('Saved AniList Personal Access Token! Progress will sync automatically.', 'success');
+    } else {
+      anilistService.clearToken();
+      setAnilistToken('');
+      showToast('Cleared AniList token (Local-only mode active).', 'info');
+    }
+  };
 
   const handleStartRqbit = async () => {
     showToast('Starting rqbit background daemon on port ' + rqbitListenPort + '...', 'info');
@@ -395,15 +425,64 @@ windowrulev2 = idleinhibit focus, class:^(yozora)$`;
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
               <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#4caf50' }} />
               <span style={{ fontSize: '12px', color: '#4caf50', fontWeight: 600 }}>
-                AniDB Client Protocol: Registered (Rate Limit: 2.0s / Cache TTL: 7 Days)
+                Metadata Rate Limit: 1.2s Queue / Cache TTL: 7 Days
               </span>
             </div>
 
             <button type="submit" className="section-btn" style={{ padding: '6px 16px' }}>
-              Save Credentials
+              Save Settings
             </button>
           </div>
         </form>
+      </div>
+
+      {/* 4b. AniList Account Watch Progress Sync */}
+      <div style={{ background: 'var(--md-sys-color-surface-container)', border: '1px solid var(--md-sys-color-outline-variant)', borderRadius: '24px', padding: '24px', marginTop: '24px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <Shield size={20} color="var(--md-sys-color-primary)" />
+            <h2 style={{ fontSize: '17px', fontWeight: 700, color: '#fff' }}>
+              AniList Account Watch Sync
+            </h2>
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: anilistToken ? '#4caf50' : '#888' }} />
+            <span style={{ fontSize: '12px', fontWeight: 600, color: anilistToken ? '#4caf50' : '#aaa' }}>
+              {anilistToken ? 'AniList Sync Connected' : 'Unlinked (Local-Only Tracking)'}
+            </span>
+          </div>
+        </div>
+
+        <p style={{ fontSize: '13px', color: 'var(--md-sys-color-on-surface-variant)', marginBottom: '16px' }}>
+          Enter your <strong>AniList Personal Access Token</strong> to automatically sync episode watch progress, completed status, and ratings back to your public AniList profile as you watch.
+        </p>
+
+        <div style={{ display: 'flex', gap: '10px' }}>
+          <input
+            type="password"
+            placeholder="Paste your AniList OAuth / Access Token..."
+            value={anilistToken}
+            onChange={(e) => setAnilistToken(e.target.value)}
+            style={{
+              flex: 1,
+              background: 'var(--md-sys-color-surface-container-high)',
+              border: '1px solid var(--md-sys-color-outline-variant)',
+              borderRadius: '12px',
+              padding: '8px 14px',
+              color: '#fff',
+              fontSize: '13px'
+            }}
+          />
+          <button
+            type="button"
+            className="section-btn"
+            onClick={handleSaveAniListToken}
+            style={{ padding: '8px 20px' }}
+          >
+            {anilistToken ? 'Save Token' : 'Clear Token'}
+          </button>
+        </div>
       </div>
 
       {/* 5. rqbit BT Streaming Core & mpv Hardware Acceleration */}
@@ -471,7 +550,25 @@ windowrulev2 = idleinhibit focus, class:^(yozora)$`;
           </div>
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: '16px', paddingTop: '16px', borderTop: '1px solid var(--md-sys-color-outline-variant)' }}>
+          <div>
+            <div style={{ fontSize: '13px', fontWeight: 600, color: '#fff' }}>
+              Default to External mpv Player (Seanime Standard)
+            </div>
+            <div style={{ fontSize: '11px', color: 'var(--md-sys-color-on-surface-variant)', marginTop: '2px' }}>
+              Launch mpv with IPC socket, hardware acceleration, and native 10-bit HEVC / ASS subtitle decoding
+            </div>
+          </div>
+
+          <input
+            type="checkbox"
+            checked={useExternalMpv}
+            onChange={handleToggleExternalMpv}
+            style={{ width: '18px', height: '18px', accentColor: 'var(--md-sys-color-primary)', cursor: 'pointer' }}
+          />
+        </div>
+
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: '16px' }}>
           <button
             type="button"
             className="section-btn"

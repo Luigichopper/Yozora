@@ -153,7 +153,7 @@ async fn add_torrent_stream(
         .header("Content-Type", "text/plain")
         .send()
         .await
-        .map_err(|e| format!("Failed to connect to rqbit at {}: {}", addr, e))?;
+        .map_err(|e| format!("Failed to connect to rqbit at {}: {}. Make sure the rqbit daemon is started.", addr, e))?;
 
     if !resp.status().is_success() {
         return Err(format!("rqbit returned error status: {}", resp.status()));
@@ -174,7 +174,7 @@ async fn add_torrent_stream(
     let mut file_name = "anime_stream.mkv".to_string();
     let mut file_size: u64 = 0;
 
-    for _ in 0..10 {
+    for _ in 0..12 {
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
         if let Ok(details_resp) = client.get(&details_url).send().await {
             if let Ok(details) = details_resp.json::<TorrentDetailsResponse>().await {
@@ -208,7 +208,16 @@ async fn add_torrent_stream(
     })
 }
 
-// 5. Launch external mpv binary with hardware acceleration
+// 4b. Direct helper for start_torrent_stream
+#[tauri::command]
+async fn start_torrent_stream(
+    magnet: String,
+) -> Result<String, String> {
+    let res = add_torrent_stream(None, magnet).await?;
+    Ok(res.stream_url)
+}
+
+// 5. Launch external mpv binary with hardware acceleration and IPC socket
 #[tauri::command]
 async fn launch_external_mpv(
     stream_url: String,
@@ -216,19 +225,35 @@ async fn launch_external_mpv(
 ) -> Result<bool, String> {
     let window_title = format!("Yozora — {}", title);
 
+    #[cfg(target_os = "windows")]
+    let ipc_arg = "--input-ipc-server=\\\\.\\pipe\\yozora-mpv";
+
+    #[cfg(not(target_os = "windows"))]
+    let ipc_arg = "--input-ipc-server=/tmp/yozora-mpv.sock";
+
     Command::new("mpv")
         .args(&[
             "--vo=gpu-next",
             "--hwdec=auto-safe",
             "--force-window=immediate",
             "--keep-open=yes",
+            "--sub-auto=all",
+            ipc_arg,
             &format!("--title={}", window_title),
             &stream_url,
         ])
         .spawn()
-        .map_err(|e| format!("Failed to spawn mpv process: {}", e))?;
+        .map_err(|e| format!("Failed to spawn mpv process: {}. Ensure mpv is installed and available on PATH.", e))?;
 
     Ok(true)
+}
+
+#[tauri::command]
+async fn open_mpv_player(
+    stream_url: String,
+    title: String,
+) -> Result<(), String> {
+    launch_external_mpv(stream_url, title).await.map(|_| ())
 }
 
 fn main() {
@@ -241,7 +266,9 @@ fn main() {
             stop_rqbit_server,
             get_rqbit_status,
             add_torrent_stream,
-            launch_external_mpv
+            start_torrent_stream,
+            launch_external_mpv,
+            open_mpv_player
         ])
         .run(tauri::generate_context!())
         .expect("error while running Yozora application");

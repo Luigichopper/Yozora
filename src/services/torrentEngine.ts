@@ -26,7 +26,8 @@ const PUBLIC_WEBRTC_TRACKERS = [
 
 class TorrentEngine {
   private client: any = null;
-  private activeTorrents: Map<string, any> = new Map();
+  private activeTorrents: Map<string, any> = new Map(); // Keyed by infoHash
+  private taskIdToInfoHash: Map<string, string> = new Map(); // Keyed by taskId -> infoHash
   private statsListeners: Map<string, (stats: SwarmStats) => void> = new Map();
 
   private getClient(): any {
@@ -67,7 +68,8 @@ class TorrentEngine {
    */
   public async addTorrent(
     magnetUri: string,
-    onProgress?: (stats: SwarmStats) => void
+    onProgress?: (stats: SwarmStats) => void,
+    taskId?: string
   ): Promise<{ infoHash: string; name: string; streamUrl?: string }> {
     const client = this.getClient();
     const preparedMagnet = this.prepareMagnetUri(magnetUri);
@@ -82,6 +84,9 @@ class TorrentEngine {
         // If already added, return existing
         const existing = client.get(preparedMagnet);
         if (existing) {
+          if (taskId) {
+            this.taskIdToInfoHash.set(taskId, existing.infoHash);
+          }
           this.setupTorrentEvents(existing, onProgress);
           resolve({
             infoHash: existing.infoHash,
@@ -94,6 +99,10 @@ class TorrentEngine {
         const torrent = client.add(preparedMagnet, {
           announce: PUBLIC_WEBRTC_TRACKERS
         });
+
+        if (taskId) {
+          this.taskIdToInfoHash.set(taskId, torrent.infoHash);
+        }
 
         if (onProgress) {
           this.statsListeners.set(torrent.infoHash, onProgress);
@@ -207,10 +216,11 @@ class TorrentEngine {
   }
 
   /**
-   * Pause / Resume torrent transfer
+   * Pause / Resume torrent transfer by infoHash or taskId
    */
-  public togglePause(infoHash: string): boolean {
-    const torrent = this.activeTorrents.get(infoHash);
+  public togglePause(idOrHash: string): boolean {
+    const hash = this.taskIdToInfoHash.get(idOrHash) || idOrHash;
+    const torrent = this.activeTorrents.get(hash);
     if (torrent) {
       if (torrent.paused) {
         torrent.resume();
@@ -224,14 +234,16 @@ class TorrentEngine {
   }
 
   /**
-   * Remove and clean up torrent
+   * Remove and clean up torrent by infoHash or taskId
    */
-  public removeTorrent(infoHash: string): void {
-    const torrent = this.activeTorrents.get(infoHash);
+  public removeTorrent(idOrHash: string): void {
+    const hash = this.taskIdToInfoHash.get(idOrHash) || idOrHash;
+    const torrent = this.activeTorrents.get(hash);
     if (torrent) {
       torrent.destroy({ destroyStore: true });
-      this.activeTorrents.delete(infoHash);
-      this.statsListeners.delete(infoHash);
+      this.activeTorrents.delete(hash);
+      this.statsListeners.delete(hash);
+      this.taskIdToInfoHash.delete(idOrHash);
     }
   }
 }

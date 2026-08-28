@@ -1,7 +1,7 @@
 import { AnimeItem, DownloadTask, LibraryEntry, TorrentSource } from '../types/anime';
 
 const DB_NAME = 'yozora_db';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 
 export class YozoraDB {
   private dbPromise: Promise<IDBDatabase>;
@@ -16,8 +16,19 @@ export class YozoraDB {
         // Store for cached anime metadata with TTL
         if (!db.objectStoreNames.contains('anime_cache')) {
           const animeStore = db.createObjectStore('anime_cache', { keyPath: 'id' });
-          animeStore.createIndex('anidbId', 'anidbId', { unique: true });
+          animeStore.createIndex('anidbId', 'anidbId', { unique: false });
           animeStore.createIndex('cachedAt', 'cachedAt', { unique: false });
+        } else {
+          const tx = (event.target as IDBOpenDBRequest).transaction;
+          const animeStore = tx?.objectStore('anime_cache');
+          if (animeStore && animeStore.indexNames.contains('anidbId')) {
+            try {
+              animeStore.deleteIndex('anidbId');
+              animeStore.createIndex('anidbId', 'anidbId', { unique: false });
+            } catch (e) {
+              console.warn('Index migration note:', e);
+            }
+          }
         }
 
         // Store for library watch status
@@ -34,6 +45,7 @@ export class YozoraDB {
         if (!db.objectStoreNames.contains('sources_cache')) {
           const srcStore = db.createObjectStore('sources_cache', { keyPath: 'id' });
           srcStore.createIndex('animeId', 'animeId', { unique: false });
+          srcStore.createIndex('cachedAt', 'cachedAt', { unique: false });
         }
 
         // Store for user settings, RSS feeds, and Matugen config
@@ -177,13 +189,23 @@ export class YozoraDB {
     store.delete(id);
   }
 
-  // --- Sources Cache ---
+  // --- Sources Cache (TTL = 6 Hours) ---
   async getSourcesForAnime(animeId: string): Promise<TorrentSource[]> {
     const store = await this.getStore('sources_cache', 'readonly');
     const index = store.index('animeId');
     return new Promise((resolve) => {
       const req = index.getAll(animeId);
-      req.onsuccess = () => resolve(req.result || []);
+      req.onsuccess = () => {
+        const results = req.result || [];
+        const now = Date.now();
+        const SOURCES_TTL_MS = 6 * 60 * 60 * 1000;
+        // Filter out expired sources (older than 6h)
+        const valid = results.filter((r: any) => !r.cachedAt || (now - r.cachedAt < SOURCES_TTL_MS));
+        resolve(valid.map((r: any) => {
+          const { cachedAt, ...src } = r;
+          return src as TorrentSource;
+        }));
+      };
       req.onerror = () => {
         console.error(`IndexedDB getSourcesForAnime failed for ${animeId}:`, req.error);
         resolve([]);
@@ -196,9 +218,10 @@ export class YozoraDB {
     const db = await this.dbPromise;
     const tx = db.transaction('sources_cache', 'readwrite');
     const store = tx.objectStore('sources_cache');
+    const now = Date.now();
 
     for (const src of sources) {
-      store.put({ ...src, animeId });
+      store.put({ ...src, animeId, cachedAt: now });
     }
 
     return new Promise((resolve, reject) => {
@@ -208,6 +231,18 @@ export class YozoraDB {
         reject(tx.error);
       };
     });
+  }
+
+  async clearSourcesForAnime(animeId: string): Promise<void> {
+    const store = await this.getStore('sources_cache', 'readwrite');
+    const index = store.index('animeId');
+    const req = index.getAllKeys(animeId);
+    req.onsuccess = () => {
+      const keys = req.result;
+      for (const key of keys) {
+        store.delete(key);
+      }
+    };
   }
 
   // --- Settings Store ---

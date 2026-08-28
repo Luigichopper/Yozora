@@ -52,32 +52,36 @@ class StreamService {
 
     // 2. Fetch real BitTorrent sources from RSS indexers (Nyaa, SubsPlease, Anime Garden, Mikan)
     try {
-      const sources = await sourceService.getSourcesForAnime(animeId || animeTitle, animeTitle);
+      const sources = await sourceService.getSourcesForAnime(animeId || animeTitle, animeTitle, romajiTitle);
       if (sources && sources.length > 0) {
         const epSources = sources.filter(s => s.episodeNum === episodeNum || !s.episodeNum);
         const targetSources = epSources.length > 0 ? epSources : sources;
 
-        for (let i = 0; i < Math.min(targetSources.length, 5); i++) {
+        for (let i = 0; i < Math.min(targetSources.length, 10); i++) {
           const src = targetSources[i];
-          let streamUrl = `http://127.0.0.1:3030/torrents/${i}/stream/0`;
-
-          try {
-            const streamRes = await rqbitService.addTorrentAndGetStream(src.magnetLink, animeTitle);
-            if (streamRes?.stream_url) {
-              streamUrl = streamRes.stream_url;
-            }
-          } catch (e) {
-            console.warn('rqbit registration fallback:', e);
-          }
-
           streamSources.push({
-            url: streamUrl,
+            url: '',
             isHls: false,
             quality: `${src.resolution} (${src.codec})`,
-            server: `[${src.group}] ${src.title.slice(0, 32)}... (▲${src.seeders})`,
-            torrentSource: src,
-            torrentId: i
+            server: `[${src.group}] ${src.title.slice(0, 34)}... (▲${src.seeders || 0})`,
+            torrentSource: src
           });
+        }
+
+        // Only register the #1 top-ranked source with rqbit for immediate streaming
+        if (streamSources.length > 0 && streamSources[0].torrentSource) {
+          try {
+            const topRes = await rqbitService.addTorrentAndGetStream(
+              streamSources[0].torrentSource.magnetLink,
+              animeTitle
+            );
+            if (topRes?.stream_url) {
+              streamSources[0].url = topRes.stream_url;
+              streamSources[0].torrentId = topRes.torrent_id;
+            }
+          } catch (e) {
+            // Non-fatal; PlayerView will fallback to WebTorrent
+          }
         }
       }
     } catch (err) {
@@ -85,6 +89,42 @@ class StreamService {
     }
 
     return streamSources;
+  }
+
+  /**
+   * Universal playback handler: Starts sequential stream if magnet and optionally spawns hardware-accelerated MPV
+   */
+  public async playAnimeStream(
+    magnetOrUrl: string,
+    title: string,
+    preferredPlayer: 'mpv' | 'webview' = 'webview'
+  ): Promise<{ streamUrl: string; launchedMpv: boolean }> {
+    let resolvedStreamUrl = magnetOrUrl;
+
+    // 1. If input is a magnet link, start sequential download in rqbit backend
+    if (magnetOrUrl.startsWith('magnet:?')) {
+      try {
+        const res = await rqbitService.addTorrentAndGetStream(magnetOrUrl, title);
+        if (res && res.stream_url) {
+          resolvedStreamUrl = res.stream_url;
+        }
+      } catch (err) {
+        console.warn('[StreamService] Failed to start rqbit stream for magnet:', err);
+        throw err;
+      }
+    }
+
+    // 2. If external MPV is preferred (or if URL is raw 10-bit MKV), launch MPV directly
+    if (preferredPlayer === 'mpv') {
+      try {
+        await rqbitService.launchExternalMpv(resolvedStreamUrl, title);
+        return { streamUrl: resolvedStreamUrl, launchedMpv: true };
+      } catch (mpvErr) {
+        console.warn('[StreamService] Failed to launch external mpv, falling back to webview:', mpvErr);
+      }
+    }
+
+    return { streamUrl: resolvedStreamUrl, launchedMpv: false };
   }
 
   /**
@@ -109,7 +149,9 @@ class StreamService {
       }
     } else {
       videoElement.src = streamUrl;
-      onReady?.();
+      // Do NOT call onReady() here — PlayerView's else branch will call
+      // video.load() + video.play() after this returns null, which is correct.
+      // Calling onReady here causes a double-play race where load() aborts play().
     }
     return null;
   }

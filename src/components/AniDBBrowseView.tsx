@@ -227,8 +227,8 @@ export const AniDBBrowseView: React.FC = () => {
                 <div className="poster-info">
                   <div className="poster-title" title={anime.title}>{anime.title}</div>
                   <div className="poster-meta">
-                    <span>{anime.year}</span>
-                    <span>{anime.episodesCount ? `${anime.episodesCount} eps` : 'TBA'}</span>
+                    <span>{anime.season || anime.year}</span>
+                    <span>{anime.type === 'Movie' ? 'Movie' : anime.episodesCount ? `${anime.episodesCount} eps` : 'TBA'}</span>
                   </div>
                 </div>
               </div>

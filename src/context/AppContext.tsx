@@ -16,6 +16,8 @@ import { streamService } from '../services/streamService';
 import { rqbitService } from '../services/rqbitService';
 import { torrentEngine } from '../services/torrentEngine';
 
+import { anilistService } from '../services/tracking/anilist';
+
 export type ActiveView = 'discover' | 'browse' | 'library' | 'cache' | 'settings';
 
 interface ActivePlayerState {
@@ -132,7 +134,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   };
 
   // Open Player with episode & dynamically resolve real stream for this anime
-  const openPlayer = async (anime: AnimeItem, episode?: Episode, videoUrl?: string, sourceTitle?: string) => {
+  const openPlayer = (anime: AnimeItem, episode?: Episode, videoUrl?: string, sourceTitle?: string) => {
     const ep = episode || (anime.episodes && anime.episodes.length > 0 ? anime.episodes[0] : {
       id: 1,
       epNumber: 1,
@@ -143,27 +145,17 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       opSkipEnd: 180
     });
     
-    // Resolve authentic stream for this specific anime & episode
-    let chosenVideo = videoUrl;
-    if (!chosenVideo) {
-      const resolvedStreams = await streamService.resolveEpisodeStream(anime.id, anime.title, anime.romajiTitle, ep.epNumber);
-      if (resolvedStreams.length > 0 && resolvedStreams[0]?.url) {
-        chosenVideo = resolvedStreams[0].url;
-      } else {
-        chosenVideo = `http://127.0.0.1:3030/torrents/0/stream/0`;
-      }
-    }
-
+    // Open player modal immediately so user sees immediate feedback
     setPlayerState({
       isOpen: true,
       anime,
       episode: ep,
-      videoUrl: chosenVideo,
+      videoUrl: videoUrl || '',
       sourceTitle: sourceTitle || `[Direct / BitTorrent] ${anime.title} - EP ${ep.epNumber.toString().padStart(2, '0')}`
     });
 
     // Update library watching progress
-    await setAnimeProgress(anime.id, ep.epNumber);
+    setAnimeProgress(anime.id, ep.epNumber);
   };
 
   const closePlayer = () => {
@@ -217,6 +209,18 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
     await db.saveLibraryEntry(updatedEntry);
     setLibrary(prev => ({ ...prev, [animeId]: updatedEntry }));
+
+    // Sync progress to AniList if authenticated
+    if (anilistService.isAuthenticated() && anime) {
+      const mediaId = anime.anidbId;
+      if (mediaId) {
+        anilistService.updateProgress(mediaId, episodeNum, anime.episodesCount).then(synced => {
+          if (synced) {
+            showToast(`Synced EP ${episodeNum} to your AniList profile!`, 'success');
+          }
+        });
+      }
+    }
   };
 
   const setAnimeScore = async (animeId: string, score: number) => {
@@ -240,7 +244,6 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   const addDownloadTask = async (anime: AnimeItem, episode: Episode, source: TorrentSource) => {
     const taskId = `dl-${Date.now()}`;
-    const initialStreamUrl = `http://127.0.0.1:3030/torrents/0/stream/0`;
 
     const newTask: DownloadTask = {
       id: taskId,
@@ -260,14 +263,14 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       peers: source.seeders || 0,
       etaSeconds: 120,
       addedAt: new Date().toLocaleDateString() + ' ' + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      videoUrl: initialStreamUrl
+      videoUrl: ''
     };
 
     await db.saveDownloadTask(newTask);
     setDownloadTasks(prev => [newTask, ...prev]);
     showToast(`Connecting to BitTorrent swarm for "${source.title}"...`, 'info');
 
-    // 1. Register with in-browser WebTorrent transfer engine
+    // 1. Register with in-browser WebTorrent transfer engine (mapped by taskId)
     try {
       torrentEngine.addTorrent(source.magnetLink, (stats) => {
         setDownloadTasks(prev => prev.map(t => {
@@ -290,7 +293,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           }
           return t;
         }));
-      });
+      }, taskId);
     } catch (e) {
       console.warn('WebTorrent engine add error:', e);
     }
@@ -314,7 +317,6 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
 
     const taskId = `dl-magnet-${Date.now()}`;
-    const initialStreamUrl = `http://127.0.0.1:3030/torrents/0/stream/0`;
 
     const newTask: DownloadTask = {
       id: taskId,
@@ -334,14 +336,14 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       peers: 0,
       etaSeconds: 120,
       addedAt: new Date().toLocaleDateString() + ' ' + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      videoUrl: initialStreamUrl
+      videoUrl: ''
     };
 
     await db.saveDownloadTask(newTask);
     setDownloadTasks(prev => [newTask, ...prev]);
     showToast(`Connecting to BitTorrent swarm for "${parsed.name}"...`, 'info');
 
-    // 1. Register with in-browser WebTorrent transfer engine
+    // 1. Register with in-browser WebTorrent transfer engine (mapped by taskId)
     try {
       torrentEngine.addTorrent(magnetUri, (stats) => {
         setDownloadTasks(prev => prev.map(t => {
@@ -364,7 +366,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           }
           return t;
         }));
-      });
+      }, taskId);
     } catch (e) {
       console.warn('WebTorrent engine add error:', e);
     }
