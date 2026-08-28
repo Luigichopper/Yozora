@@ -80,6 +80,7 @@ export const SettingsView: React.FC = () => {
   };
 
   const handleStartRqbit = async () => {
+    rqbitService.setListenPort(rqbitListenPort);
     await db.saveSetting('rqbit_port', rqbitListenPort);
     showToast('Starting rqbit background daemon on port ' + rqbitListenPort + '...', 'info');
     try {

@@ -288,6 +288,8 @@ async fn add_torrent_stream(
         }
     }
 
+    let mut metadata_resolved = found_files;
+
     // 2. If not immediately available, poll for torrent metadata & files
     if !found_files {
         let details_url = format!("http://{}/torrents/{}", addr, torrent_id);
@@ -305,6 +307,7 @@ async fn add_torrent_stream(
                                     target_file_idx = idx;
                                     file_name = file.name.clone();
                                     file_size = file.length;
+                                    metadata_resolved = true;
                                 }
                             }
 
@@ -316,15 +319,25 @@ async fn add_torrent_stream(
                                         target_file_idx = idx;
                                         file_name = file.name.clone();
                                         file_size = file.length;
+                                        metadata_resolved = true;
                                     }
                                 }
                             }
-                            break;
+                            if metadata_resolved {
+                                break;
+                            }
                         }
                     }
                 }
             }
         }
+    }
+
+    if !metadata_resolved {
+        return Err(format!(
+            "Could not resolve torrent metadata from peers for ID {}. Ensure the release has active seeders or try another source mirror.",
+            torrent_id
+        ));
     }
 
     let stream_url = format!("http://{}/torrents/{}/stream/{}", addr, torrent_id, target_file_idx);
@@ -449,6 +462,27 @@ async fn launch_external_mpv(
 }
 
 #[tauri::command]
+async fn fetch_rss_feed(url: String) -> Result<String, String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(6))
+        .user_agent("Yozora/0.1.0")
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let resp = client.get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("Failed to fetch RSS feed {}: {}", url, e))?;
+
+    if !resp.status().is_success() {
+        return Err(format!("RSS request returned HTTP status {}", resp.status()));
+    }
+
+    let text = resp.text().await.map_err(|e| e.to_string())?;
+    Ok(text)
+}
+
+#[tauri::command]
 async fn open_mpv_player(
     stream_url: String,
     title: String,
@@ -468,7 +502,8 @@ fn main() {
             add_torrent_stream,
             start_torrent_stream,
             launch_external_mpv,
-            open_mpv_player
+            open_mpv_player,
+            fetch_rss_feed
         ])
         .run(tauri::generate_context!())
         .expect("error while running Yozora application");

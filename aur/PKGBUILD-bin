@@ -8,13 +8,13 @@ url="https://github.com/Luigichopper/Yozora"
 license=('GPL-3.0-or-later')
 depends=(
   'mpv'
+  'rqbit'
   'gtk3'
   'webkit2gtk-4.1'
   'xdg-desktop-portal-hyprland'
 )
 optdepends=(
   'matugen: dynamic Material You color palette generation'
-  'rqbit: embedded high-performance BitTorrent streaming daemon'
 )
 provides=('yozora')
 conflicts=('yozora' 'yozora-git')

@@ -172,9 +172,25 @@ class SourceService {
   }
 
   /**
-   * Fetch live RSS XML feed with concurrent CORS proxy failover
+   * Fetch live RSS XML feed with native Tauri IPC or concurrent CORS proxy failover
    */
   public async fetchLiveRssXml(feedUrl: string): Promise<string | null> {
+    // 1. If running under Tauri, use native Rust reqwest client (Zero CORS, max speed)
+    if (typeof window !== 'undefined' && '__TAURI__' in window) {
+      try {
+        const tauri = (window as any).__TAURI__;
+        if (tauri && tauri.invoke) {
+          const xml = await tauri.invoke('fetch_rss_feed', { url: feedUrl });
+          if (xml && (xml.includes('<rss') || xml.includes('<item') || xml.trim().startsWith('<'))) {
+            return xml;
+          }
+        }
+      } catch (e) {
+        console.warn(`Tauri native RSS fetch failed for ${feedUrl}, falling back to proxy:`, e);
+      }
+    }
+
+    // 2. Browser fallback: race direct fetch and CORS proxies
     const fetchWithTimeout = async (url: string, ms = 3000): Promise<string> => {
       const res = await fetch(url, { signal: AbortSignal.timeout(ms) });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);

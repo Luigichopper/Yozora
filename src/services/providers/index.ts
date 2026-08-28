@@ -25,7 +25,7 @@ export class ConsumetProvider implements AnimeProvider {
     for (const provider of providers) {
       try {
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 800);
+        const timeoutId = setTimeout(() => controller.abort(), 4000);
         
         const res = await fetch(`${baseUrl}/${provider}/${encodeURIComponent(query)}`, {
           signal: controller.signal

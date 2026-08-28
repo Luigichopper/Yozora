@@ -125,13 +125,19 @@ export const PlayerView: React.FC = () => {
                     setCurrentVideoSrc(res.stream_url);
                     showToast('Sequential BitTorrent streaming active', 'success');
                   }
-                } catch (rqbitErr) {
-                  // Fallback to WebTorrent
+                } catch (rqbitErr: any) {
+                  const errMsg = typeof rqbitErr === 'string' ? rqbitErr : rqbitErr?.message || 'rqbit daemon is unreachable';
+                  showToast(errMsg, 'error');
+                  // Attempt browser WebTorrent only as an optional best-effort fallback
                   const video = videoRef.current;
                   if (video) {
-                    await torrentEngine.streamToVideoElement(uri, video);
-                    setIsPlaying(true);
-                    showToast('Streaming via in-browser WebTorrent swarm', 'info');
+                    try {
+                      await torrentEngine.streamToVideoElement(uri, video);
+                      setIsPlaying(true);
+                      showToast('Attempting in-browser WebTorrent swarm (WebRTC seeders only)', 'info');
+                    } catch {
+                      setHasVideoError(true);
+                    }
                   }
                 }
               }
@@ -265,13 +271,19 @@ export const PlayerView: React.FC = () => {
             showToast('Sequential BitTorrent streaming active', 'success');
             return;
           }
-        } catch (e) {
+        } catch (e: any) {
+          const errMsg = typeof e === 'string' ? e : e?.message || 'rqbit stream resolution failed';
+          showToast(errMsg, 'error');
           const video = videoRef.current;
           if (video) {
-            await torrentEngine.streamToVideoElement(uri, video);
-            setIsPlaying(true);
-            setHasVideoError(false);
-            showToast('Streaming via in-browser WebTorrent swarm', 'info');
+            try {
+              await torrentEngine.streamToVideoElement(uri, video);
+              setIsPlaying(true);
+              setHasVideoError(false);
+              showToast('Attempting in-browser WebTorrent swarm (WebRTC seeders only)', 'info');
+            } catch {
+              setHasVideoError(true);
+            }
           }
         }
       } else {

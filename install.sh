@@ -192,6 +192,10 @@ check_dependencies() {
         missing_deps+=("mpv")
     fi
 
+    if ! command -v rqbit &>/dev/null && [ ! -f "${HOME}/.cargo/bin/rqbit" ]; then
+        missing_deps+=("rqbit (BitTorrent streaming engine)")
+    fi
+
     # Check WebKitGTK / GTK3 runtime presence
     if [ "$DISTRO_ID" = "arch" ] || [[ "$DISTRO_LIKE" == *"arch"* ]]; then
         if ! pacman -Q webkit2gtk-4.1 &>/dev/null && ! pacman -Q webkit2gtk &>/dev/null; then
@@ -210,16 +214,16 @@ check_dependencies() {
     if [ ${#missing_deps[@]} -gt 0 ]; then
         echo ""
         log_warn "Some recommended runtime dependencies were not detected: ${missing_deps[*]}"
-        echo -e "To ensure full video playback and UI rendering, install them with:"
+        echo -e "To ensure full video playback, BitTorrent streaming, and UI rendering, install them with:"
         
         if [ "$DISTRO_ID" = "arch" ] || [[ "$DISTRO_LIKE" == *"arch"* ]]; then
-            echo -e "  ${C_CYAN}sudo pacman -S --needed mpv webkit2gtk-4.1 gtk3${C_RESET}"
-        elif [ "$DISTRO_ID" = "ubuntu" ] || [ "$DISTRO_ID" = "debian" ] || [[ "$DISTRO_LIKE" == *"debian"* ]]; then
-            echo -e "  ${C_CYAN}sudo apt install mpv libwebkit2gtk-4.1-0 libgtk-3-0${C_RESET}"
+            echo -e "  ${C_CYAN}sudo pacman -S --needed mpv webkit2gtk-4.1 gtk3 && (command -v yay &>/dev/null && yay -S rqbit || cargo install rqbit)${C_RESET}"
+        elif [ "$DISTRO_ID" = "ubuntu" ] || [ "$DISTRO_ID" = "debian" ] || [[ "$DISTRO_LIKE" == *"debian"* ]] || [[ "$DISTRO_LIKE" == *"ubuntu"* ]]; then
+            echo -e "  ${C_CYAN}sudo apt install mpv libwebkit2gtk-4.1-0 libgtk-3-0 && cargo install rqbit${C_RESET}"
         elif [ "$DISTRO_ID" = "fedora" ] || [[ "$DISTRO_LIKE" == *"fedora"* ]]; then
-            echo -e "  ${C_CYAN}sudo dnf install mpv webkit2gtk4.1 gtk3${C_RESET}"
+            echo -e "  ${C_CYAN}sudo dnf install mpv webkit2gtk4.1 gtk3 && cargo install rqbit${C_RESET}"
         elif [ "$DISTRO_ID" = "opensuse" ] || [[ "$DISTRO_LIKE" == *"suse"* ]]; then
-            echo -e "  ${C_CYAN}sudo zypper install mpv libwebkit2gtk-4_1-0 gtk3${C_RESET}"
+            echo -e "  ${C_CYAN}sudo zypper install mpv libwebkit2gtk-4_1-0 gtk3 && cargo install rqbit${C_RESET}"
         fi
         echo ""
     fi

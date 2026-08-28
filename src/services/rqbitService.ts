@@ -1,3 +1,5 @@
+import { db } from './db';
+
 export interface RqbitStatus {
   running: boolean;
   listen_addr: string;
@@ -24,7 +26,20 @@ export interface RqbitTorrentStats {
 }
 
 class RqbitService {
-  private defaultAddr = '127.0.0.1:3030';
+  private defaultPort = '3030';
+  private cachedListenAddr: string | null = null;
+
+  public async getListenAddr(): Promise<string> {
+    if (this.cachedListenAddr) return this.cachedListenAddr;
+    const port = await db.getSetting<string>('rqbit_port', this.defaultPort);
+    this.cachedListenAddr = `127.0.0.1:${port || this.defaultPort}`;
+    return this.cachedListenAddr;
+  }
+
+  public setListenPort(port: string): void {
+    const cleanPort = (port || '').trim() || this.defaultPort;
+    this.cachedListenAddr = `127.0.0.1:${cleanPort}`;
+  }
 
   public isTauri(): boolean {
     return typeof window !== 'undefined' && '__TAURI__' in window;
@@ -41,11 +56,13 @@ class RqbitService {
   /**
    * Start rqbit background server process
    */
-  public async startServer(listenAddr = this.defaultAddr, cacheDir?: string): Promise<RqbitStatus> {
+  public async startServer(listenAddr?: string, cacheDir?: string): Promise<RqbitStatus> {
+    const addr = listenAddr || (await this.getListenAddr());
+
     if (this.isTauri()) {
       try {
         return await this.invokeTauri<RqbitStatus>('start_rqbit_server', {
-          listenAddr,
+          listenAddr: addr,
           cacheDir
         });
       } catch (e: any) {
@@ -55,9 +72,9 @@ class RqbitService {
     }
 
     // Direct HTTP ping check
-    const status = await this.checkStatus(listenAddr);
+    const status = await this.checkStatus(addr);
     if (!status.running) {
-      throw new Error(`rqbit daemon is not listening on ${listenAddr}. Ensure rqbit is installed ('cargo install rqbit') and running.`);
+      throw new Error(`rqbit daemon is not listening on ${addr}. Ensure rqbit is installed ('cargo install rqbit') and running.`);
     }
     return status;
   }
@@ -79,27 +96,29 @@ class RqbitService {
   /**
    * Check if rqbit REST API is listening
    */
-  public async checkStatus(listenAddr = this.defaultAddr): Promise<RqbitStatus> {
+  public async checkStatus(listenAddr?: string): Promise<RqbitStatus> {
+    const addr = listenAddr || (await this.getListenAddr());
+
     if (this.isTauri()) {
       try {
-        return await this.invokeTauri<RqbitStatus>('get_rqbit_status', { listenAddr });
+        return await this.invokeTauri<RqbitStatus>('get_rqbit_status', { listenAddr: addr });
       } catch (e) {
         // Fallthrough to direct fetch
       }
     }
 
     try {
-      const res = await fetch(`http://${listenAddr}/torrents`, {
+      const res = await fetch(`http://${addr}/torrents`, {
         signal: AbortSignal.timeout(1200)
       });
       return {
         running: res.ok,
-        listen_addr: listenAddr
+        listen_addr: addr
       };
     } catch {
       return {
         running: false,
-        listen_addr: listenAddr
+        listen_addr: addr
       };
     }
   }
@@ -110,20 +129,22 @@ class RqbitService {
   public async addTorrentAndGetStream(
     torrentUriOrMagnet: string,
     animeTitle: string,
-    listenAddr = this.defaultAddr
+    listenAddr?: string
   ): Promise<StreamResult> {
     const payload = (torrentUriOrMagnet || '').trim();
     if (!payload) {
       throw new Error('No valid magnet link or .torrent URL provided for streaming');
     }
 
+    const addr = listenAddr || (await this.getListenAddr());
+
     // 1. If running under Tauri, ensure daemon is running
     if (this.isTauri()) {
       try {
-        const status = await this.checkStatus(listenAddr);
+        const status = await this.checkStatus(addr);
         if (!status.running) {
           try {
-            await this.startServer(listenAddr);
+            await this.startServer(addr);
             // Brief pause for server socket binding
             await new Promise(r => setTimeout(r, 600));
           } catch (startErr) {
@@ -132,7 +153,7 @@ class RqbitService {
         }
 
         return await this.invokeTauri<StreamResult>('add_torrent_stream', {
-          listenAddr,
+          listenAddr: addr,
           magnet: payload
         });
       } catch (e: any) {
@@ -149,7 +170,7 @@ class RqbitService {
 
       // Check if already registered in rqbit (strict infoHash match only)
       try {
-        const listRes = await fetch(`http://${listenAddr}/torrents`, { signal: AbortSignal.timeout(2000) });
+        const listRes = await fetch(`http://${addr}/torrents`, { signal: AbortSignal.timeout(2000) });
         if (listRes.ok) {
           const listData = await listRes.json();
           const torrents: any[] = Array.isArray(listData) ? listData : (listData.torrents || []);
@@ -165,7 +186,7 @@ class RqbitService {
 
       // If not yet registered, POST to rqbit (rqbit accepts magnet:?, http://, https://, or local file)
       if (torrentId === null) {
-        const res = await fetch(`http://${listenAddr}/torrents?overwrite=true`, {
+        const res = await fetch(`http://${addr}/torrents?overwrite=true`, {
           method: 'POST',
           headers: { 'Content-Type': 'text/plain' },
           body: payload,
@@ -194,7 +215,7 @@ class RqbitService {
         try {
           let files: any[] = initialFiles;
           if (files.length === 0) {
-            const detailsRes = await fetch(`http://${listenAddr}/torrents/${torrentId}`, { signal: AbortSignal.timeout(2000) });
+            const detailsRes = await fetch(`http://${addr}/torrents/${torrentId}`, { signal: AbortSignal.timeout(2000) });
             if (detailsRes.ok) {
               const details = await detailsRes.json();
               files = details.files || [];
@@ -241,7 +262,7 @@ class RqbitService {
             file_index: targetFileIndex,
             file_name: fileName,
             file_size: fileSize,
-            stream_url: `http://${listenAddr}/torrents/${torrentId}/stream/${targetFileIndex}`
+            stream_url: `http://${addr}/torrents/${torrentId}/stream/${targetFileIndex}`
           };
         }
       } catch (err) {
@@ -249,7 +270,7 @@ class RqbitService {
       }
 
       // 3. Throw clear error when rqbit is unavailable rather than returning an invalid URL
-      throw new Error(`rqbit streaming engine is offline at ${listenAddr}. Start the rqbit daemon in Settings or install rqbit on your system.`);
+      throw new Error(`rqbit streaming engine is offline at ${addr}. Start the rqbit daemon in Settings or install rqbit on your system.`);
     }
 
     /**
