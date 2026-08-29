@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { X, Play, Star, Plus, Check, Layers, Radio, ExternalLink, Calendar, Film, Bookmark, Loader2 } from 'lucide-react';
 import { AnimeItem, Episode, TorrentSource, WatchStatus } from '../types/anime';
 import { useApp } from '../context/AppContext';
@@ -17,8 +17,52 @@ export const AnimeDetailModal: React.FC<AnimeDetailModalProps> = ({ anime, onClo
   const [activeTab, setActiveTab] = useState<'overview' | 'episodes' | 'sources'>('overview');
   const [sources, setSources] = useState<TorrentSource[]>([]);
   const [loadingSources, setLoadingSources] = useState<boolean>(false);
+  const [episodeSearch, setEpisodeSearch] = useState<string>('');
+  const [selectedEpisodeRange, setSelectedEpisodeRange] = useState<number>(0);
+  const [customEpisodeCount, setCustomEpisodeCount] = useState<number>(0);
 
   const libraryEntry = library[anime.id];
+
+  // Dynamically computed base episodes
+  const baseEpisodes = useMemo(() => {
+    const totalCount = Math.max(anime.episodesCount || 0, anime.episodes.length, customEpisodeCount || 0);
+    if (anime.type === 'Movie') {
+      return anime.episodes.length > 0 ? anime.episodes : [{
+        id: 1,
+        epNumber: 1,
+        title: 'Full Movie',
+        airDate: anime.airDateStart,
+        durationMinutes: 110
+      }];
+    }
+    const count = Math.max(totalCount, 1);
+    return Array.from({ length: count }, (_, i) => {
+      const epNum = i + 1;
+      const existing = anime.episodes.find(e => e.epNumber === epNum) || anime.episodes[i];
+      if (existing) return existing;
+      return {
+        id: epNum,
+        epNumber: epNum,
+        title: `Episode ${epNum.toString().padStart(2, '0')}`,
+        airDate: anime.airDateStart,
+        durationMinutes: 24
+      };
+    });
+  }, [anime, customEpisodeCount]);
+
+  // Filtered episodes based on search or range
+  const filteredEpisodes = useMemo(() => {
+    let list = baseEpisodes;
+    if (episodeSearch.trim()) {
+      const q = episodeSearch.toLowerCase().trim();
+      return list.filter(ep => ep.epNumber.toString() === q || ep.title.toLowerCase().includes(q));
+    }
+    if (selectedEpisodeRange >= 0 && list.length > 25) {
+      const start = selectedEpisodeRange * 25;
+      return list.slice(start, start + 25);
+    }
+    return list;
+  }, [baseEpisodes, episodeSearch, selectedEpisodeRange]);
 
   // Fetch real aggregated sources for this anime
   useEffect(() => {
@@ -352,90 +396,175 @@ export const AnimeDetailModal: React.FC<AnimeDetailModalProps> = ({ anime, onClo
           )}
 
           {activeTab === 'episodes' && (
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: '12px' }}>
-              {(anime.episodes.length > 0 ? anime.episodes : Array.from({ length: anime.episodesCount || 12 }, (_, i) => ({
-                id: i + 1,
-                epNumber: i + 1,
-                title: `Episode ${i + 1}`,
-                airDate: anime.airDateStart,
-                durationMinutes: 24,
-                opSkipStart: 90,
-                opSkipEnd: 180
-              }))).map((ep: Episode) => {
-                const isWatched = libraryEntry && libraryEntry.currentEpisode >= ep.epNumber;
-                return (
-                  <div
-                    key={ep.id}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+              {/* Episode Header & Search / Jump */}
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '10px' }}>
+                <div style={{ fontSize: '13px', fontWeight: 600, color: 'var(--md-sys-color-on-surface-variant)' }}>
+                  Total Available: {baseEpisodes.length} {baseEpisodes.length === 1 ? 'Episode' : 'Episodes'}
+                </div>
+
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <input
+                    type="text"
+                    placeholder="Search / jump to EP #..."
+                    value={episodeSearch}
+                    onChange={(e) => setEpisodeSearch(e.target.value)}
                     style={{
                       background: 'var(--md-sys-color-surface-container-high)',
                       border: '1px solid var(--md-sys-color-outline-variant)',
-                      borderRadius: '14px',
-                      padding: '12px 16px',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                      cursor: 'pointer',
-                      transition: 'border-color 0.2s ease'
+                      borderRadius: '10px',
+                      padding: '6px 12px',
+                      fontSize: '12px',
+                      color: '#fff',
+                      width: '170px'
                     }}
-                    onClick={() => {
-                      onClose();
-                      openPlayer(anime, ep);
+                  />
+
+                  {anime.type !== 'Movie' && (
+                    <button
+                      onClick={() => setCustomEpisodeCount(prev => (prev || baseEpisodes.length) + 12)}
+                      style={{
+                        background: 'var(--md-sys-color-surface-container-high)',
+                        color: 'var(--md-sys-color-primary)',
+                        border: '1px solid var(--md-sys-color-outline-variant)',
+                        borderRadius: '10px',
+                        padding: '6px 12px',
+                        fontSize: '11px',
+                        fontWeight: 600,
+                        cursor: 'pointer'
+                      }}
+                      title="Add 12 more episode slots for ongoing/unindexed anime"
+                    >
+                      +12 Episodes
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Range Tabs for Long Anime (>25 episodes) */}
+              {baseEpisodes.length > 25 && !episodeSearch.trim() && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', overflowX: 'auto', paddingBottom: '4px', scrollbarWidth: 'none' }}>
+                  <button
+                    onClick={() => setSelectedEpisodeRange(-1)}
+                    style={{
+                      background: selectedEpisodeRange === -1 ? 'var(--md-sys-color-primary)' : 'var(--md-sys-color-surface-container-high)',
+                      color: selectedEpisodeRange === -1 ? 'var(--md-sys-color-on-primary)' : 'var(--md-sys-color-on-surface-variant)',
+                      border: '1px solid var(--md-sys-color-outline-variant)',
+                      borderRadius: '999px',
+                      padding: '3px 12px',
+                      fontSize: '11px',
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                      whiteSpace: 'nowrap'
                     }}
                   >
-                    <div>
-                      <div style={{ fontSize: '13px', fontWeight: 600, color: '#fff' }}>
-                        EP {ep.epNumber.toString().padStart(2, '0')}: {ep.title}
+                    All ({baseEpisodes.length})
+                  </button>
+                  {Array.from({ length: Math.ceil(baseEpisodes.length / 25) }, (_, rIdx) => {
+                    const rStart = rIdx * 25 + 1;
+                    const rEnd = Math.min((rIdx + 1) * 25, baseEpisodes.length);
+                    const isSelected = selectedEpisodeRange === rIdx;
+                    return (
+                      <button
+                        key={rIdx}
+                        onClick={() => setSelectedEpisodeRange(rIdx)}
+                        style={{
+                          background: isSelected ? 'var(--md-sys-color-primary)' : 'var(--md-sys-color-surface-container-high)',
+                          color: isSelected ? 'var(--md-sys-color-on-primary)' : 'var(--md-sys-color-on-surface-variant)',
+                          border: isSelected ? '1px solid var(--md-sys-color-primary)' : '1px solid var(--md-sys-color-outline-variant)',
+                          borderRadius: '999px',
+                          padding: '3px 12px',
+                          fontSize: '11px',
+                          fontWeight: 600,
+                          cursor: 'pointer',
+                          whiteSpace: 'nowrap'
+                        }}
+                      >
+                        {rStart}–{rEnd}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* Episode Cards Grid */}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: '12px' }}>
+                {filteredEpisodes.map((ep: Episode) => {
+                  const isWatched = libraryEntry && libraryEntry.currentEpisode >= ep.epNumber;
+                  return (
+                    <div
+                      key={ep.id}
+                      style={{
+                        background: 'var(--md-sys-color-surface-container-high)',
+                        border: '1px solid var(--md-sys-color-outline-variant)',
+                        borderRadius: '14px',
+                        padding: '12px 16px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        cursor: 'pointer',
+                        transition: 'border-color 0.2s ease'
+                      }}
+                      onClick={() => {
+                        onClose();
+                        openPlayer(anime, ep);
+                      }}
+                    >
+                      <div>
+                        <div style={{ fontSize: '13px', fontWeight: 600, color: '#fff' }}>
+                          EP {ep.epNumber.toString().padStart(2, '0')}: {ep.title}
+                        </div>
+                        <div style={{ fontSize: '11px', color: 'var(--md-sys-color-on-surface-variant)', marginTop: '3px' }}>
+                          {ep.durationMinutes}m • {ep.airDate}
+                          {ep.opSkipEnd && <span style={{ marginLeft: '6px', color: 'var(--md-sys-color-primary)' }}>• OP Skip (90s)</span>}
+                        </div>
                       </div>
-                      <div style={{ fontSize: '11px', color: 'var(--md-sys-color-on-surface-variant)', marginTop: '3px' }}>
-                        {ep.durationMinutes}m • {ep.airDate}
-                        {ep.opSkipEnd && <span style={{ marginLeft: '6px', color: 'var(--md-sys-color-primary)' }}>• OP Skip (90s)</span>}
+
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setAnimeProgress(anime.id, ep.epNumber);
+                          }}
+                          style={{
+                            background: isWatched ? 'var(--md-sys-color-primary-container)' : 'transparent',
+                            border: '1px solid var(--md-sys-color-outline-variant)',
+                            color: isWatched ? 'var(--md-sys-color-on-primary-container)' : 'var(--md-sys-color-outline)',
+                            borderRadius: '50%',
+                            width: '28px',
+                            height: '28px',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            cursor: 'pointer'
+                          }}
+                          title={isWatched ? 'Watched' : 'Mark Watched'}
+                        >
+                          <Check size={14} />
+                        </button>
+
+                        <button
+                          style={{
+                            background: 'var(--md-sys-color-primary)',
+                            color: 'var(--md-sys-color-on-primary)',
+                            border: 'none',
+                            borderRadius: '50%',
+                            width: '28px',
+                            height: '28px',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            cursor: 'pointer'
+                          }}
+                          title="Stream Episode"
+                        >
+                          <Play size={14} fill="currentColor" />
+                        </button>
                       </div>
                     </div>
-
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setAnimeProgress(anime.id, ep.epNumber);
-                        }}
-                        style={{
-                          background: isWatched ? 'var(--md-sys-color-primary-container)' : 'transparent',
-                          border: '1px solid var(--md-sys-color-outline-variant)',
-                          color: isWatched ? 'var(--md-sys-color-on-primary-container)' : 'var(--md-sys-color-outline)',
-                          borderRadius: '50%',
-                          width: '28px',
-                          height: '28px',
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          cursor: 'pointer'
-                        }}
-                        title={isWatched ? 'Watched' : 'Mark Watched'}
-                      >
-                        <Check size={14} />
-                      </button>
-
-                      <button
-                        style={{
-                          background: 'var(--md-sys-color-primary)',
-                          color: 'var(--md-sys-color-on-primary)',
-                          border: 'none',
-                          borderRadius: '50%',
-                          width: '28px',
-                          height: '28px',
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          cursor: 'pointer'
-                        }}
-                        title="Stream Episode"
-                      >
-                        <Play size={14} fill="currentColor" />
-                      </button>
-                    </div>
-                  </div>
-                );
-              })}
+                  );
+                })}
+              </div>
             </div>
           )}
 

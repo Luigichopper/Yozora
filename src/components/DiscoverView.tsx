@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Calendar, Play, Sparkles, Flame, Star, Clock, Loader2 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
-import { anidbService } from '../services/anidbService';
+import { anidbService, deduplicateAnime } from '../services/anidbService';
 import { AnimeItem } from '../types/anime';
 
 export const DiscoverView: React.FC = () => {
@@ -16,10 +16,18 @@ export const DiscoverView: React.FC = () => {
     async function loadDiscoverData() {
       try {
         setIsLoading(true);
-        const trending = await anidbService.getTrendingAnime(10);
+        const [trending, topRated] = await Promise.all([
+          anidbService.getTrendingAnime(12),
+          anidbService.searchAnime('', { sortBy: 'SCORE_DESC', minScore: 8.0 }, 1, 14)
+        ]);
+
         if (isMounted) {
-          setTrendingList(trending);
-          setRecommendedAnime(trending.slice(1, 8));
+          const dedupedTrending = deduplicateAnime(trending);
+          const trendingIds = new Set(dedupedTrending.map(t => t.id));
+          const distinctRecommended = deduplicateAnime(topRated.items.filter(item => !trendingIds.has(item.id)));
+
+          setTrendingList(dedupedTrending);
+          setRecommendedAnime(distinctRecommended.length > 0 ? distinctRecommended.slice(0, 10) : dedupedTrending.slice(4, 10));
         }
 
         // Map for continue watching

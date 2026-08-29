@@ -5,9 +5,51 @@ const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days TTL per spec
 
 const DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'] as const;
 
+export interface AnimeSearchFilters {
+  type?: string;
+  status?: string;
+  season?: string;
+  year?: string;
+  genre?: string;
+  minScore?: number;
+  sortBy?: 'TRENDING_DESC' | 'POPULARITY_DESC' | 'SCORE_DESC' | 'START_DATE_DESC' | 'FAVOURITES_DESC' | 'EPISODES_DESC' | 'TITLE_ROMAJI';
+}
+
+export function normalizeTitle(title: string): string {
+  return (title || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '')
+    .trim();
+}
+
+export function deduplicateAnime(items: AnimeItem[]): AnimeItem[] {
+  const seenIds = new Set<string>();
+  const seenMalIds = new Set<number>();
+  const seenTitles = new Set<string>();
+  const result: AnimeItem[] = [];
+
+  for (const item of items) {
+    if (!item) continue;
+    const canonicalId = (item.id || '').toLowerCase();
+    const normTitle = normalizeTitle(item.title);
+    const normRomaji = normalizeTitle(item.romajiTitle);
+
+    if (seenIds.has(canonicalId)) continue;
+    if (item.anidbId && item.anidbId > 0 && seenMalIds.has(item.anidbId)) continue;
+    if (normTitle && seenTitles.has(normTitle)) continue;
+
+    seenIds.add(canonicalId);
+    if (item.anidbId && item.anidbId > 0) seenMalIds.add(item.anidbId);
+    if (normTitle) seenTitles.add(normTitle);
+    if (normRomaji) seenTitles.add(normRomaji);
+    result.push(item);
+  }
+  return result;
+}
+
 class AniListMetadataService {
   private lastRequestTime = 0;
-  private minIntervalMs = 800; // Rate-limit queue for AniList GraphQL
+  private minIntervalMs = 700; // Rate-limit queue for AniList GraphQL
 
   private async rateLimitDelay(): Promise<void> {
     const now = Date.now();
@@ -23,17 +65,27 @@ class AniListMetadataService {
    */
   public async searchAnime(
     query: string,
-    filterOptions?: {
-      type?: string;
-      status?: string;
-      season?: string;
-      year?: string;
-      genre?: string;
-    },
+    filterOptions?: AnimeSearchFilters,
     page = 1,
     perPage = 30
   ): Promise<{ items: AnimeItem[]; hasNextPage: boolean }> {
-    // Check local database first
+    // 1. If online, query live GraphQL API for deep search across AniList's 20,000+ catalog
+    if (typeof navigator !== 'undefined' && navigator.onLine) {
+      try {
+        const liveResult = await this.fetchLiveGraphQL(query, filterOptions, page, perPage);
+        if (liveResult.items.length > 0) {
+          await db.saveBulkAnime(liveResult.items);
+          return {
+            items: deduplicateAnime(liveResult.items),
+            hasNextPage: liveResult.hasNextPage
+          };
+        }
+      } catch (e) {
+        console.warn('Live metadata query failed, falling back to local cache:', e);
+      }
+    }
+
+    // 2. Local database cache fallback
     const cachedAll = await db.getAllCachedAnime();
     let localItems = cachedAll;
 
@@ -51,42 +103,31 @@ class AniListMetadataService {
 
     // Apply filters to local results
     if (filterOptions) {
-      const { type, status, season, year, genre } = filterOptions;
+      const { type, status, season, year, genre, minScore } = filterOptions;
       if (type && type !== 'All') localItems = localItems.filter(a => a.type === type);
       if (status && status !== 'All') localItems = localItems.filter(a => a.status === status);
-      if (season && season !== 'All') localItems = localItems.filter(a => a.season.includes(season));
-      if (year && year !== 'All') localItems = localItems.filter(a => a.year.toString() === year);
-      if (genre && genre !== 'All') localItems = localItems.filter(a => a.genres.includes(genre));
-    }
-
-    // If online and (few local matches or querying specifically), query live API
-    if (typeof navigator !== 'undefined' && navigator.onLine && (localItems.length < 5 || (query.trim() && localItems.length < 10))) {
-      try {
-        const liveResult = await this.fetchLiveGraphQL(query, filterOptions, page, perPage);
-        if (liveResult.items.length > 0) {
-          await db.saveBulkAnime(liveResult.items);
-          const idMap = new Set(localItems.map(r => r.id));
-          for (const item of liveResult.items) {
-            if (!idMap.has(item.id)) {
-              localItems.push(item);
-            }
-          }
-        }
-      } catch (e) {
-        console.warn('Live metadata query fallback used cached items:', e);
+      if (season && season !== 'All') localItems = localItems.filter(a => a.season.toLowerCase().includes(season.toLowerCase()));
+      if (year && year !== 'All') {
+        if (year === '2010s') localItems = localItems.filter(a => a.year >= 2010 && a.year <= 2019);
+        else if (year === '2000s') localItems = localItems.filter(a => a.year >= 2000 && a.year <= 2009);
+        else if (year === '1990s') localItems = localItems.filter(a => a.year >= 1990 && a.year <= 1999);
+        else localItems = localItems.filter(a => a.year.toString() === year);
       }
+      if (genre && genre !== 'All') localItems = localItems.filter(a => a.genres.includes(genre));
+      if (minScore && minScore > 0) localItems = localItems.filter(a => a.rating >= minScore);
     }
 
+    const deduped = deduplicateAnime(localItems);
     return {
-      items: localItems,
-      hasNextPage: localItems.length > perPage
+      items: deduped,
+      hasNextPage: false
     };
   }
 
   /**
    * Fetch Trending Anime for Discover View
    */
-  public async getTrendingAnime(perPage = 10): Promise<AnimeItem[]> {
+  public async getTrendingAnime(perPage = 12): Promise<AnimeItem[]> {
     if (typeof navigator !== 'undefined' && navigator.onLine) {
       try {
         await this.rateLimitDelay();
@@ -145,8 +186,9 @@ class AniListMetadataService {
         const json = await res.json();
         const live = (json?.data?.Page?.media || []).map((m: any) => this.mapMediaToAnimeItem(m));
         if (live.length > 0) {
-          await db.saveBulkAnime(live);
-          return live;
+          const deduped = deduplicateAnime(live);
+          await db.saveBulkAnime(deduped);
+          return deduped;
         }
       } catch (e) {
         console.warn('Trending fetch fallback:', e);
@@ -154,7 +196,7 @@ class AniListMetadataService {
     }
 
     const cached = await db.getAllCachedAnime();
-    return cached.filter(a => a.isTrending || a.isHotBanner);
+    return deduplicateAnime(cached.filter(a => a.isTrending || a.isHotBanner));
   }
 
   /**
@@ -258,7 +300,7 @@ class AniListMetadataService {
 
   private async fetchLiveGraphQL(
     search?: string,
-    filters?: { type?: string; status?: string; season?: string; year?: string; genre?: string },
+    filters?: AnimeSearchFilters,
     page = 1,
     perPage = 25
   ): Promise<{ items: AnimeItem[]; hasNextPage: boolean }> {
@@ -283,14 +325,31 @@ class AniListMetadataService {
     if (filters?.type && formatMap[filters.type]) filterVariables.format = formatMap[filters.type];
     if (filters?.status && statusMap[filters.status]) filterVariables.status = statusMap[filters.status];
     if (filters?.season && filters.season !== 'All') filterVariables.season = filters.season.toUpperCase();
-    if (filters?.year && filters.year !== 'All') filterVariables.seasonYear = parseInt(filters.year);
+    if (filters?.year && filters.year !== 'All') {
+      const yrNum = parseInt(filters.year);
+      if (!isNaN(yrNum) && yrNum >= 1960) {
+        filterVariables.seasonYear = yrNum;
+      }
+    }
     if (filters?.genre && filters.genre !== 'All') filterVariables.genre = filters.genre;
+    if (filters?.minScore && filters.minScore > 0) filterVariables.averageScore_greater = Math.round(filters.minScore * 10);
+
+    const sortMap: Record<string, string> = {
+      'TRENDING_DESC': 'TRENDING_DESC',
+      'POPULARITY_DESC': 'POPULARITY_DESC',
+      'SCORE_DESC': 'SCORE_DESC',
+      'START_DATE_DESC': 'START_DATE_DESC',
+      'FAVOURITES_DESC': 'FAVOURITES_DESC',
+      'EPISODES_DESC': 'EPISODES_DESC',
+      'TITLE_ROMAJI': 'TITLE_ROMAJI'
+    };
+    filterVariables.sort = [filters?.sortBy && sortMap[filters.sortBy] ? sortMap[filters.sortBy] : 'POPULARITY_DESC'];
 
     const gqlQuery = `
-      query ($page: Int, $perPage: Int, $search: String, $format: MediaFormat, $status: MediaStatus, $season: MediaSeason, $seasonYear: Int, $genre: String) {
+      query ($page: Int, $perPage: Int, $search: String, $format: MediaFormat, $status: MediaStatus, $season: MediaSeason, $seasonYear: Int, $genre: String, $averageScore_greater: Int, $sort: [MediaSort]) {
         Page(page: $page, perPage: $perPage) {
           pageInfo { hasNextPage }
-          media(search: $search, format: $format, status: $status, season: $season, seasonYear: $seasonYear, genre: $genre, type: ANIME, sort: POPULARITY_DESC) {
+          media(search: $search, format: $format, status: $status, season: $season, seasonYear: $seasonYear, genre: $genre, averageScore_greater: $averageScore_greater, type: ANIME, sort: $sort) {
             id
             idMal
             title { romaji english native }
@@ -351,6 +410,7 @@ class AniListMetadataService {
 
   private mapMediaToAnimeItem(m: any): AnimeItem {
     const isMovie = m.format === 'MOVIE';
+    const isMusic = m.format === 'MUSIC';
     const isOVA = m.format === 'OVA' || m.format === 'SPECIAL';
     
     // Accurate season calculation
@@ -377,22 +437,28 @@ class AniListMetadataService {
     // Accurate episodes calculation & streaming metadata
     const streamingEps: any[] = m.streamingEpisodes || [];
     let totalEps = 12;
-    if (isMovie) {
+    if (isMovie || isMusic) {
       totalEps = 1;
-    } else if (m.episodes && m.episodes > 0) {
+    } else if (m.episodes && m.episodes > 1) {
       totalEps = m.episodes;
-    } else if (streamingEps.length > 0) {
-      totalEps = Math.max(streamingEps.length, m.nextAiringEpisode ? m.nextAiringEpisode.episode : 12);
+    } else if (m.status === 'RELEASING' && m.nextAiringEpisode?.episode) {
+      totalEps = Math.max(m.episodes || 12, m.nextAiringEpisode.episode);
+    } else if (streamingEps.length > 1) {
+      totalEps = streamingEps.length;
+    } else if (m.episodes === 1 && (m.format === 'TV' || m.format === 'TV_SHORT')) {
+      // Preliminary TV placeholder
+      totalEps = 12;
+    } else if (m.episodes === 1) {
+      totalEps = 1;
     } else if (m.nextAiringEpisode?.episode) {
-      // If airing, show at least 12 or next airing episode + standard buffer
       totalEps = Math.max(12, m.nextAiringEpisode.episode);
     } else if (isOVA) {
-      totalEps = 1;
+      totalEps = m.episodes || (streamingEps.length > 0 ? streamingEps.length : 1);
     } else {
       totalEps = 12;
     }
 
-    const episodesCount = isMovie ? 1 : (m.episodes || totalEps);
+    const episodesCount = isMovie ? 1 : totalEps;
 
     const episodes: Episode[] = Array.from({ length: totalEps }, (_, i) => {
       const epNum = i + 1;
